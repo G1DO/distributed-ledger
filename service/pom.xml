@@ -26,6 +26,7 @@
     <google-java-format.version>1.28.0</google-java-format.version>
     <checkstyle-plugin.version>3.6.0</checkstyle-plugin.version>
     <enforcer-plugin.version>3.4.1</enforcer-plugin.version>
+    <tomcat.version>11.0.25</tomcat.version>
   </properties>
 
   <dependencies>
