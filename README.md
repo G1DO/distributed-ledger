@@ -14,6 +14,14 @@ curl -s localhost:8080/ready
 
 Expected: `{"status":"UP"}` on both endpoints; app + Postgres 16 running.
 
+If the host already occupies 5432/8080, use overrides (defaults unchanged):
+
+```bash
+POSTGRES_PORT=5433 APP_PORT=8081 docker compose -f ../docker-compose.yml up --build
+curl -s localhost:8081/health
+curl -s localhost:8081/ready
+```
+
 ## Required toolchain (JDK 25 baseline)
 
 - JDK 25 LTS (Temurin `25.x`). Local env may have JDK 26 — do NOT use it for `main` builds.
