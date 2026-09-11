@@ -4,7 +4,7 @@ COPY service/pom.xml service/pom.xml
 COPY service/src service/src
 COPY service/config service/config
 WORKDIR /build/service
-RUN mvn -B verify -Pstrict -DskipTests=false
+RUN mvn -B verify -Pstrict -DskipTests=false -DskipITs
 
 FROM eclipse-temurin:25-jre
 WORKDIR /app

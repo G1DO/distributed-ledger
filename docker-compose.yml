@@ -24,6 +24,10 @@ services:
       POSTGRES_DB: ledger
       POSTGRES_USER: ledger
       POSTGRES_PASSWORD: ledger
+      APP_DB_USER: app_role
+      APP_DB_PASSWORD: app
+      FLYWAY_USER: ledger
+      FLYWAY_PASSWORD: ledger
     depends_on:
       postgres:
         condition: service_healthy

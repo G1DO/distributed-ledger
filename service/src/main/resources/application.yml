@@ -3,8 +3,15 @@ server:
 spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:5432/${POSTGRES_DB:ledger}
-    username: ${POSTGRES_USER:ledger}
-    password: ${POSTGRES_PASSWORD:ledger}
+    username: ${APP_DB_USER:${POSTGRES_USER:ledger}}
+    password: ${APP_DB_PASSWORD:${POSTGRES_PASSWORD:ledger}}
+    hikari:
+      # V1 creates app_role in the same startup that first connects as it.
+      initialization-fail-timeout: 0
   flyway:
     enabled: true
     locations: classpath:db/migration
+    validate-on-migrate: true
+    clean-disabled: true
+    user: ${FLYWAY_USER:${POSTGRES_USER:ledger}}
+    password: ${FLYWAY_PASSWORD:${POSTGRES_PASSWORD:ledger}}
