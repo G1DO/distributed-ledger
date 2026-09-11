@@ -15,7 +15,7 @@ Every mutating response echoes the committed request body fields plus
 server-assigned `id` and `sequence`. Replays echo the original stored
 result byte-for-byte (excluding transport headers).
 
-## Endpoints (v1 stub shapes; no logic yet in O1-1)
+## Endpoints (v1 stub shapes; no logic yet)
 
 ### `POST /append`
 
@@ -47,4 +47,4 @@ Request: `{ "snapshotId": "uuid" }`
 
 ### `GET /health`, `GET /ready` (skeleton stub)
 
-- `200`: `{ "status": "UP" }`. No auth. `/ready` does not gate on DB in O1-1.
+- `200`: `{ "status": "UP" }`. No auth. `/ready` does not gate on DB.

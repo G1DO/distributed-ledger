@@ -1,11 +1,10 @@
 # Distributed Ledger — v1 Spec Invariants (I1–I6)
 
-Status: v1 baseline for O1. I7–I14 explicitly OUT OF SCOPE for v1.
+Status: v1 baseline. I7–I14 explicitly OUT OF SCOPE for v1.
 
 > Schema note: the ledger schema (`account / capacity / reservation /
 > operation / audit_entry / outbox`) is the DB-level reading of I1–I6 —
-> see `docs/adr/DEC-LEDGER-03-schema.md` for the mapping. API shapes
-> (`POST /v1/reserve`, `POST /v1/commit`) land in O1-3.
+> see `docs/adr/DEC-LEDGER-03-schema.md` for the mapping.
 
 Conventions: each invariant is falsifiable — it states a check that can fail.
 

@@ -1,6 +1,6 @@
 # Distributed Ledger
 
-Skeleton for O1 (`O1-1`): spec-first + buildable Spring Boot app + green CI. No business logic yet.
+Spec-first + buildable Spring Boot app + green CI. No business logic yet.
 
 ## 5-min replay (stub)
 
