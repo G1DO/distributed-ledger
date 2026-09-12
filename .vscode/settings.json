@@ -1,0 +1,11 @@
+{
+    "java.compile.nullAnalysis.mode": "automatic",
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-25",
+            "path": "/home/ibrahim/.jdks/temurin-25.0.4.1",
+            "default": true
+        }
+    ],
+    "java.jdt.ls.java.home": "/home/ibrahim/.jdks/temurin-25.0.4.1"
+}
