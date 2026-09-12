@@ -17,7 +17,17 @@ jobs:
           cache: maven
       - name: Verify (strict)
         working-directory: service
-        run: mvn -B verify -Pstrict
+        run: ./mvnw -B verify -Pstrict
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-jdk25
+          path: |
+            service/target/surefire-reports/
+            service/target/failsafe-reports/
+            service/target/process-crash/
+          retention-days: 30
 
   build-jdk26:
     runs-on: ubuntu-latest
@@ -31,7 +41,17 @@ jobs:
           cache: maven
       - name: Verify compat lane (allowed fail)
         working-directory: service
-        run: mvn -B verify -Pstrict
+        run: ./mvnw -B verify -Pstrict,compat26
+      - name: Preserve compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-jdk26
+          path: |
+            service/target/surefire-reports/
+            service/target/failsafe-reports/
+            service/target/process-crash/
+          retention-days: 30
 
   osv:
     runs-on: ubuntu-latest

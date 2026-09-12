@@ -4,15 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-/** SQL-backed assertions for the O1 subset of the ledger invariants (I1 through I6). */
+/** O1 accounting checks at quiescent boundaries; this is not a tenant or durability proof. */
 final class InvariantChecker {
 
   private final JdbcTemplate jdbc;
+  private final List<UUID> accounts;
 
-  InvariantChecker(JdbcTemplate jdbc) {
+  InvariantChecker(JdbcTemplate jdbc, UUID... accounts) {
     this.jdbc = jdbc;
+    this.accounts = List.of(accounts);
+    if (accounts.length == 0) {
+      throw new IllegalArgumentException("Explicit fixture accounts are required");
+    }
   }
 
   void assertO1Invariants() {
@@ -23,9 +29,11 @@ final class InvariantChecker {
   }
 
   private void assertCapacityIsNonnegativeAndConserved() {
-    List<Map<String, Object>> capacities =
-        jdbc.queryForList("SELECT account_id, total, reserved, committed, available FROM capacity");
-    for (Map<String, Object> capacity : capacities) {
+    for (UUID account : accounts) {
+      Map<String, Object> capacity =
+          jdbc.queryForMap(
+              "SELECT account_id, total, reserved, committed, available FROM capacity WHERE account_id = ?",
+              account);
       int total = number(capacity, "total");
       int reserved = number(capacity, "reserved");
       int committed = number(capacity, "committed");
@@ -36,7 +44,46 @@ final class InvariantChecker {
       assertThat(total)
           .as("I2 total for %s", capacity.get("account_id"))
           .isEqualTo(available + reserved + committed);
+      Map<String, Object> reservations =
+          jdbc.queryForMap(
+              "SELECT COALESCE(SUM(amount) FILTER (WHERE status = 'RESERVED'), 0) AS reserved,"
+                  + " COALESCE(SUM(amount) FILTER (WHERE status = 'COMMITTED'), 0) AS committed"
+                  + " FROM reservation WHERE account_id = ?",
+              account);
+      assertThat((long) reserved)
+          .as("reserved matches reservation records for %s", account)
+          .isEqualTo(((Number) reservations.get("reserved")).longValue());
+      assertThat((long) committed)
+          .as("committed matches reservation records for %s", account)
+          .isEqualTo(((Number) reservations.get("committed")).longValue());
+      Map<String, Object> audit =
+          jdbc.queryForMap(
+              "SELECT COALESCE(SUM(amount) FILTER (WHERE kind = 'RESERVE'), 0) AS reserved_ever,"
+                  + " COALESCE(SUM(amount) FILTER (WHERE kind = 'COMMIT'), 0) AS committed"
+                  + " FROM audit_entry WHERE account_id = ?",
+              account);
+      assertThat((long) reserved + committed)
+          .as("capacity matches reserve audit effects for %s", account)
+          .isEqualTo(((Number) audit.get("reserved_ever")).longValue());
+      assertThat((long) committed)
+          .as("capacity matches commit audit effects for %s", account)
+          .isEqualTo(((Number) audit.get("committed")).longValue());
     }
+  }
+
+  void assertExpectedCapacity(UUID account, int total, int reserved, int committed) {
+    Map<String, Object> actual =
+        jdbc.queryForMap(
+            "SELECT total, reserved, committed, available FROM capacity WHERE account_id = ?",
+            account);
+    assertThat(number(actual, "total")).as("model total for %s", account).isEqualTo(total);
+    assertThat(number(actual, "reserved")).as("model reserved for %s", account).isEqualTo(reserved);
+    assertThat(number(actual, "committed"))
+        .as("model committed for %s", account)
+        .isEqualTo(committed);
+    assertThat(number(actual, "available"))
+        .as("model available for %s", account)
+        .isEqualTo(total - reserved - committed);
   }
 
   private void assertOneAuditPerCompletedOperation() {

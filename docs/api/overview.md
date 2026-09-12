@@ -22,6 +22,10 @@ authentication or authorization layer.
   text verbatim. Postgres JSONB normalizes formatting on write; the first response is read back
   from the stored row, so first / replay / `GET /operations/{key}` are byte-identical.
 - All SQL uses bound parameters. `accountId` / `reservationId` must be UUIDv4, `amount > 0`.
+- Keys are currently global, not principal-scoped. Claiming a key precedes business locks, so
+  a valid replay still succeeds after capacity is exhausted or its reservation is committed.
+  A failed transaction does not retain its key. This is at-most-once committed effect, not
+  exactly-once network delivery; a timeout must be resolved by lookup or same-key retry.
 
 ## Endpoints
 
@@ -29,7 +33,7 @@ authentication or authorization layer.
 
 Request: `{ "accountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64", "ttlSec": 3600? }`
 
-`ttlSec`, when supplied, must be at least 1 and participates in the request hash. V1 does not
+`ttlSec`, when supplied, must be at least 1 and participates in the request hash. The O1 slice does not
 persist it or run an expiry process; it has no reservation-expiry effect.
 
 - `201` first commit: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
@@ -39,9 +43,10 @@ persist it or run an expiry process; it has no reservation-expiry effect.
   No `reservation` / `operation` / `audit_entry` row left behind.
 - `422` same key + different hash.
 - `400` missing/invalid header, body, UUID, or `amount <= 0`. `404` unknown `accountId`.
-- Single `@Transactional`: lock `capacity FOR UPDATE` → validate → insert `operation` +
+- Single `@Transactional(READ_COMMITTED)`: claim operation → resolve replay/mismatch →
+  lock `capacity FOR UPDATE` → validate → insert
   `reservation(RESERVED)` + `outbox(dispatched=false)` + exactly one `audit_entry(kind=RESERVE,
-  before/after snapshots)` → commit.
+  before/after snapshots)` → complete operation with stored response → commit.
 
 ### `POST /v1/commit`
 
@@ -52,9 +57,10 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 - Replay same key+same hash → original body, no second `audit_entry`, no double decrement.
 - `409` reservation already `COMMITTED` (second effect impossible) or capacity violated.
 - `422` same key + different hash. `404` unknown reservation.
-- Atomically `RESERVED -> COMMITTED`: lock `reservation` + `capacity FOR UPDATE`,
+- Atomically `RESERVED -> COMMITTED`: claim operation and resolve replay/mismatch, then lock
+  `reservation` + `capacity FOR UPDATE`,
   `UPDATE reservation SET COMMITTED`, `reserved -= amount, committed += amount`
-  (`SUM` stable), insert `operation(COMMIT)` + `outbox` + `audit_entry(kind=COMMIT)` same tx.
+  (`SUM` stable), insert `outbox` + `audit_entry(kind=COMMIT)`, and complete the operation same tx.
 - The implemented state transition is `RESERVED -> COMMITTED`; there is no release, transfer, or
   expiry operation.
 
