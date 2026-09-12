@@ -47,6 +47,29 @@ curl -s -X POST localhost:8080/v1/commit -H 'Content-Type: application/json' \
 # -> 200 identical body, no second decrement; same key+different body -> 422
 ```
 
+Crash/restart replay: start a reserve and stop the app before its response. A request can either
+commit before the stop or roll back with the lost connection; it must never leave a partial state.
+After restart, reusing the same key either returns the committed body or creates the one valid
+reserve.
+
+```bash
+KKEY=kill-reserve-1
+curl -sS -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $KKEY" \
+  -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}" &
+sleep 0.05; docker compose kill app; wait || true
+docker compose up -d app
+curl -s -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $KKEY" \
+  -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}"
+curl -s localhost:8080/v1/operations/$KKEY
+curl -s "localhost:8080/v1/query?accountId=$ACCT"
+```
+
+The timing smoke test above intentionally accepts either commit outcome. The deterministic
+seven-point PostgreSQL proof is `cd service && mvn -Dit.test=KillMidTxIT verify`; its matrix and
+the 32-writer concurrency evidence are in [the O1 docs](docs/README.md).
+
 If the host already occupies 5432/8080, use overrides (defaults unchanged):
 
 ```bash
