@@ -10,8 +10,8 @@ planned, not implemented. This unauthenticated development service is not produc
 ```bash
 cd service
 ./mvnw verify -Pstrict
-docker compose -f ../docker-compose.yml up --build
-curl -s localhost:8080/health
+docker compose -f ../docker-compose.yml up --build -d
+curl --fail --retry 20 --retry-delay 1 --retry-connrefused -sS localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
@@ -77,8 +77,8 @@ separate each failure model and its limitations from the 32-writer concurrency e
 If the host already occupies 5432/8080, use overrides (defaults unchanged):
 
 ```bash
-POSTGRES_PORT=5433 APP_PORT=8081 docker compose -f ../docker-compose.yml up --build
-curl -s localhost:8081/health
+POSTGRES_PORT=5433 APP_PORT=8081 docker compose -f ../docker-compose.yml up --build -d
+curl --fail --retry 20 --retry-delay 1 --retry-connrefused -sS localhost:8081/health
 curl -s localhost:8081/ready
 ```
 
