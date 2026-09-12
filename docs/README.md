@@ -1,0 +1,10 @@
+# Technical documentation
+
+- [Architecture overview](architecture/overview.md) — implemented service, database, and data flow.
+- [API](api/overview.md) — HTTP contract and idempotency behavior.
+- [Ledger invariants](design/specifications/ledger-invariants.md) — capacity, atomicity, audit, and idempotency guarantees.
+- [Development and testing](development/testing.md) — build, test, and integration-test workflow.
+- [Database migrations](development/database-migrations.md) — Flyway and PostgreSQL constraints.
+- [Configuration](reference/configuration.md) — runtime variables and local Compose defaults.
+- [Security model](security/security-model.md) — current trust boundaries and limitations.
+- [Decisions](decisions/) — accepted architectural decisions.

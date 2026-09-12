@@ -5,10 +5,8 @@ Status: accepted. Date: 2026-09-12.
 ## Context
 
 O1-3 (`POST /v1/reserve`, `POST /v1/commit`) needs correct concurrent behavior now, without
-prejudging the O1-4 bench (32 writers, lost-update + multi-row write-skew reproduction, options
-A pessimistic vs B optimistic `UPDATE ... WHERE` vs C `SERIALIZABLE+retry`, with deadlock rate
-and p50/p95/p99 in `docs/perf/o1-concurrency.md`). DEC-LEDGER-03 explicitly says: investigate,
-do not hard-mandate `FOR UPDATE` yet — document the choice.
+prejudging a future concurrency benchmark. DEC-LEDGER-03 explicitly said to investigate and
+document the choice rather than silently hard-mandating `FOR UPDATE`.
 
 ## Decision
 
