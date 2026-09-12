@@ -1,0 +1,4 @@
+strategy,writers,successes,conflicts,serialization_failures,deadlocks,p50_microseconds,p95_microseconds,p99_microseconds
+pessimistic,32,32,0,0,0,76017,89989,90687
+optimistic,32,10,22,0,0,70266,84702,87725
+serializable,32,32,0,76,0,171971,288460,302358

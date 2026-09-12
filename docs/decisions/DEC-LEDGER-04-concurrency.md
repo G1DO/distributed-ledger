@@ -1,4 +1,4 @@
-# DEC-LEDGER-04 — O1-3 Concurrency Choice (FOR UPDATE)
+# DEC-LEDGER-04 — O1 Concurrency Choice (FOR UPDATE)
 
 Status: accepted. Date: 2026-09-12.
 
@@ -29,6 +29,18 @@ document the choice rather than silently hard-mandating `FOR UPDATE`.
 5. **DB `CHECK(available>=0)` stays the backstop:** app-level `available < amount -> 409` covers
    the single-writer case; two racers that both pass the app check serialize on the row lock, and
    any residual overdraw (e.g. lock skipped in future refactor) still fails `23514 -> 409`.
+
+## O1-4 investigation result
+
+The 32-writer PostgreSQL 16 experiment compares this approach with a version-guarded optimistic
+update and `SERIALIZABLE` plus bounded retry. The evidence, including the deliberately reproduced
+lost-update and multi-row write-skew controls, is in
+[the O1 concurrency investigation](../perf/o1-concurrency.md).
+
+The result does not change this decision: pessimistic locking completed every writer without
+deadlock and needs no caller-visible retry protocol. The optimistic experiment intentionally
+returns conflicts on stale versions; the serializable experiment needs a retry policy. Neither is
+a silent replacement for the O1 API.
 
 ## Consequences
 

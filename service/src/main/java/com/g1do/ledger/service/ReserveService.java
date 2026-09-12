@@ -17,9 +17,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReserveService {
 
   private final JdbcLedgerRepository repository;
+  private final TransactionProbe transactionProbe;
 
-  public ReserveService(JdbcLedgerRepository repository) {
+  public ReserveService(JdbcLedgerRepository repository, TransactionProbe transactionProbe) {
     this.repository = repository;
+    this.transactionProbe = transactionProbe;
   }
 
   @Transactional
@@ -48,6 +50,7 @@ public class ReserveService {
         repository
             .lockCapacity(accountId)
             .orElseThrow(() -> new LedgerNotFoundException("account not found: " + accountIdValue));
+    transactionProbe.reached(TransactionCheckpoint.AFTER_CAPACITY_LOCK);
     int total = ((Number) capacity.get("total")).intValue();
     int reserved = ((Number) capacity.get("reserved")).intValue();
     int committed = ((Number) capacity.get("committed")).intValue();
@@ -74,8 +77,10 @@ public class ReserveService {
     repository.insertOperation(
         operationId, idempotencyKey, "RESERVE", "COMPLETED", requestHash, responseBody);
     String storedBody = repository.getOperationResponseBody(operationId);
+    transactionProbe.reached(TransactionCheckpoint.AFTER_OPERATION_INSERT);
     repository.addReserved(accountId, amount);
     repository.insertReservation(reservationId, accountId, operationId, amount, "RESERVED");
+    transactionProbe.reached(TransactionCheckpoint.AFTER_RESERVATION_INSERT);
 
     String beforeJson = snapshotJson(total, reserved, committed, available);
     String afterJson = snapshotJson(total, reserved + amount, committed, available - amount);
@@ -92,6 +97,7 @@ public class ReserveService {
             + reservationId
             + "\"}";
     repository.insertOutbox(outboxId, "reservation", outboxPayload);
+    transactionProbe.reached(TransactionCheckpoint.AFTER_OUTBOX_INSERT);
 
     return new OperationResult(storedBody, false);
   }
