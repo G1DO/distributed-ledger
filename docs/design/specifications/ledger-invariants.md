@@ -1,13 +1,9 @@
-# Distributed Ledger — O1 Invariants (ledger reading, I1–I6)
+# Ledger invariants
 
-Status: O1-3 baseline. I7–I14 explicitly OUT OF SCOPE for v1.
-
-> Mapping note: the original log-model wording (`POST /append`, I1 append-only … I6
-> read-your-commit) is superseded for O1 by the ledger DB reading below. The six tables
-> (`account / capacity / reservation / operation / audit_entry / outbox`) are the
-> enforcement point — see `docs/adr/DEC-LEDGER-03-schema.md` and
-> `docs/adr/DEC-LEDGER-04-concurrency.md`. `operation.request_hash`,
-> `operation.response_body`, and `audit_entry.id` carry the old I2/I5/I3 guarantees.
+The six-table ledger model (`account`, `capacity`, `reservation`, `operation`, `audit_entry`,
+and `outbox`) is the enforcement point. See [DEC-LEDGER-03](../../decisions/DEC-LEDGER-03-schema.md)
+and [DEC-LEDGER-04](../../decisions/DEC-LEDGER-04-concurrency.md) for the accepted schema and
+concurrency decisions.
 
 Conventions: each invariant is falsifiable — it states a check that can fail.
 
@@ -25,8 +21,8 @@ Falsifier: `SUM` drift after commit, or `total` changing outside a capacity chan
 
 ## I3 — Audit append-only
 
-Every successful reserve/commit inserts exactly one `audit_entry` with before/after
-snapshots; `audit_entry` rows are never updated or deleted
+Each first successful reserve or commit effect inserts exactly one `audit_entry` with before/after
+snapshots; an idempotent replay creates none. The application database role cannot update or delete audit rows
 (`REVOKE UPDATE, DELETE ON audit_entry FROM app_role`, SQLState `42501` on violation).
 Falsifier: mutated/deleted audit row, or a committed operation without exactly one audit row.
 
@@ -39,22 +35,22 @@ same key+different hash fails `422`. Concurrent same-key writers converge to one
 Falsifier: two operations sharing one key, a replay creating a second reservation/audit row,
 or replay returning different bytes.
 
-## I5 — COMMITTED survives declared failures
+## I5 — Committed effects are atomic
 
-A `200/201` with an operation id means the business + outbox + audit rows are durable in the
-same local tx and survive restart; a rolled-back (killed mid-tx) attempt leaves no partial
+A response that creates a new reserve or commit effect is produced from a row persisted in the
+same local transaction as the business, outbox, and audit rows. A rolled-back (killed mid-tx) attempt leaves no partial
 rows, no orphan `reservation` without `operation`, and capacity sums consistent.
 Falsifier: committed entry lost after restart, or partial rows after a kill-mid-tx rollback.
 
-## I6 — Single-tenant isolation of worker/logs
+## I6 — Account-scoped mutation
 
-O1 runs as a single principal with bound parameters; one account's reserve/commit never
-changes another account's `capacity`, and `GET /v1/query` / `GET /v1/operations/{key}` only
-reflect the addressed account/key.
+One account's reserve/commit never changes another account's `capacity`, and `GET /v1/query` /
+`GET /v1/operations/{key}` only reflect the addressed account/key. This is not tenant isolation:
+the API currently has no caller authentication or authorization.
 Falsifier: cross-account capacity change, or a query returning another account's state.
 
-## OUT OF SCOPE for v1 (I7–I14)
+## Not implemented
 
-I7–I14 (expiry reaper, auth, transfer/release, observability SLOs,
-multi-region replication, control-plane API, live migration, privacy)
-are explicitly OUT OF SCOPE for v1 and MUST NOT be assumed by clients.
+Expiry, transfer/release, HTTP authentication and authorization, observability, replication,
+control-plane APIs, live migration, and privacy controls are not implemented and must not be
+assumed by callers.

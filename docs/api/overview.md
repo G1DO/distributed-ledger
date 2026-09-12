@@ -1,7 +1,8 @@
-# Distributed Ledger — v1 Reserve/Commit/Query API (O1-3)
+# Ledger API
 
-No control-plane API in v1 per REQ-V1-03. O1 endpoints: `POST /v1/reserve`, `POST /v1/commit`,
-`GET /v1/query`, `GET /v1/operations/{key}` (+ `/health`, `/ready`).
+The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `GET /v1/query`,
+`GET /v1/operations/{key}`, `GET /health`, and `GET /ready`. The service has no HTTP
+authentication or authorization layer.
 
 ## Headers
 
@@ -28,6 +29,9 @@ No control-plane API in v1 per REQ-V1-03. O1 endpoints: `POST /v1/reserve`, `POS
 
 Request: `{ "accountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64", "ttlSec": 3600? }`
 
+`ttlSec`, when supplied, must be at least 1 and participates in the request hash. V1 does not
+persist it or run an expiry process; it has no reservation-expiry effect.
+
 - `201` first commit: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"uuid-v4","status":"RESERVED" }` (JSONB-normalized formatting).
 - `200` replay (same key+same hash): identical body, no second reservation.
@@ -51,23 +55,24 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 - Atomically `RESERVED -> COMMITTED`: lock `reservation` + `capacity FOR UPDATE`,
   `UPDATE reservation SET COMMITTED`, `reserved -= amount, committed += amount`
   (`SUM` stable), insert `operation(COMMIT)` + `outbox` + `audit_entry(kind=COMMIT)` same tx.
-- O1 state machine only: `RESERVED -> COMMITTED`. No Release/Transfer/expiry (O2).
+- The implemented state transition is `RESERVED -> COMMITTED`; there is no release, transfer, or
+  expiry operation.
 
 ### `GET /v1/query?accountId=`
 
 - `200`: `{ "accountId":"...","total":N,"reserved":N,"committed":N,"available":N }`.
-  Reflects committed state. `404` unknown account.
+  It reflects the current persisted capacity. `400` invalid UUIDv4; `404` unknown account.
 
 ### `GET /v1/operations/{key}`
 
 - `200`: persisted `response_body` verbatim. `404` unknown key.
-- Equivalent of the O1 audit read path alongside `GET /v1/query`.
+- This is an idempotent operation-response lookup, not an audit-entry query.
 
 ### `GET /health`, `GET /ready`
 
 - `200`: `{ "status": "UP" }`. No auth. `/ready` does not gate on DB.
 
-## Explicitly out (O1-3)
+## Not implemented
 
-No Release/Transfer/expiry sweeper (O2), no JWT/RBAC — single principal in O1 (O3),
-no metrics/Grafana (O4), no outbox relay worker (table-only, `dispatched=false` default).
+There is no release/transfer/expiry worker, HTTP authentication or RBAC, metrics/tracing/alerts,
+or outbox relay worker. The outbox is table-only and defaults to `dispatched=false`.

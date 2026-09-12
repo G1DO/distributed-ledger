@@ -71,8 +71,14 @@ mvn -v         # Maven 3.6.3+, JDK 25
 - CI proves JDK 25 (`verify -Pstrict` required green). JDK 26 job is allowed-fail compat lane; no 26-only APIs, no preview APIs (`StructuredTaskScope`) on `main` — explicit `ExecutorService` lifecycle only.
 - Verify: `mvn -v` (JDK 25) + `mvn verify -Pstrict` log; ArchUnit test `DomainArchitectureTest` green.
 - O1-3 proof: `ReserveCommitSliceIT`, `IdempotencyConcurrentIT`, `OverCapacity409IT`, `KillMidTxIT`
-  (all Testcontainers PG16). Concurrency choice: `docs/adr/DEC-LEDGER-04-concurrency.md`.
+  (all Testcontainers PG16). Concurrency choice: [DEC-LEDGER-04](docs/decisions/DEC-LEDGER-04-concurrency.md).
 
 ## Layout
 
-`spec/` `service/` `engines/postgres/` `engines/raft-lab/` (lab flag) `engines/replicated-store/` `control-plane/` (stub) `simulation/` (stub) `docs/adr/`.
+`service/` `engines/` `control-plane/` (no implemented API) `simulation/` (no implemented harness) `docs/`.
+
+## Documentation
+
+The durable technical documentation is indexed in [docs/README.md](docs/README.md): the API
+contract, ledger invariants, architecture, development workflow, configuration, security model,
+and accepted decisions all live there.
