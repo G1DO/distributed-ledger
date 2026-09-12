@@ -3,9 +3,9 @@ package com.g1do.ledger.service;
 import com.g1do.ledger.domain.RequestHash;
 import com.g1do.ledger.infra.JdbcLedgerRepository;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -18,13 +18,18 @@ public class ReserveService {
 
   private final JdbcLedgerRepository repository;
   private final TransactionProbe transactionProbe;
+  private final OperationCoordinator operations;
 
-  public ReserveService(JdbcLedgerRepository repository, TransactionProbe transactionProbe) {
+  public ReserveService(
+      JdbcLedgerRepository repository,
+      TransactionProbe transactionProbe,
+      OperationCoordinator operations) {
     this.repository = repository;
     this.transactionProbe = transactionProbe;
+    this.operations = operations;
   }
 
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public OperationResult reserve(
       String accountIdValue, int amount, String idempotencyKey, Integer ttlSec, String headerKey) {
     SliceSupport.requireHeaderMatchesBody(headerKey, idempotencyKey);
@@ -36,15 +41,11 @@ public class ReserveService {
     String canonical = RequestHash.canonicalReserve(accountIdValue, amount, idempotencyKey, ttlSec);
     String requestHash = RequestHash.sha256Hex(canonical);
 
-    Optional<Map<String, Object>> existing = repository.findOperationByKey(idempotencyKey);
-    if (existing.isPresent()) {
-      String storedHash = (String) existing.get().get("request_hash");
-      String storedBody = (String) existing.get().get("response_body");
-      if (!requestHash.equals(storedHash)) {
-        throw new HashMismatchException("Idempotency-Key reuse with different body");
-      }
-      return new OperationResult(storedBody, true);
+    OperationClaim claim = operations.claim("RESERVE", idempotencyKey, requestHash);
+    if (claim.replayed()) {
+      return claim.replay();
     }
+    transactionProbe.reached(TransactionCheckpoint.AFTER_OPERATION_INSERT);
 
     Map<String, Object> capacity =
         repository
@@ -59,7 +60,7 @@ public class ReserveService {
       throw new OverCapacityException("Reserve over capacity");
     }
 
-    UUID operationId = UUID.randomUUID();
+    UUID operationId = claim.operationId();
     UUID reservationId = UUID.randomUUID();
     UUID outboxId = UUID.randomUUID();
 
@@ -74,10 +75,6 @@ public class ReserveService {
             + reservationId
             + "\",\"status\":\"RESERVED\"}";
 
-    repository.insertOperation(
-        operationId, idempotencyKey, "RESERVE", "COMPLETED", requestHash, responseBody);
-    String storedBody = repository.getOperationResponseBody(operationId);
-    transactionProbe.reached(TransactionCheckpoint.AFTER_OPERATION_INSERT);
     repository.addReserved(accountId, amount);
     repository.insertReservation(reservationId, accountId, operationId, amount, "RESERVED");
     transactionProbe.reached(TransactionCheckpoint.AFTER_RESERVATION_INSERT);
@@ -99,7 +96,7 @@ public class ReserveService {
     repository.insertOutbox(outboxId, "reservation", outboxPayload);
     transactionProbe.reached(TransactionCheckpoint.AFTER_OUTBOX_INSERT);
 
-    return new OperationResult(storedBody, false);
+    return new OperationResult(operations.complete(operationId, responseBody), false);
   }
 
   static String snapshotJson(int total, int reserved, int committed, int available) {

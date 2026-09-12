@@ -1,14 +1,17 @@
 # Distributed Ledger
 
-Spec-first Spring Boot ledger + green CI. O1-3 slice live: `Reserve → Commit → Query`, idempotent.
+Java 25 / Spring Boot 4.1 / PostgreSQL 16 capacity-reservation engine. The implemented slice is
+`Reserve → Commit → Query`, with transactional idempotency, audit, and outbox storage.
+O1 verification is in progress; Release, Transfer, expiry, authorization, relay, and PITR are
+planned, not implemented. This unauthenticated development service is not production-ready.
 
 ## 5-min replay
 
 ```bash
 cd service
-mvn verify -Pstrict
-docker compose -f ../docker-compose.yml up --build
-curl -s localhost:8080/health
+./mvnw verify -Pstrict
+docker compose -f ../docker-compose.yml up --build -d
+curl --fail --retry 20 --retry-delay 1 --retry-connrefused -sS localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
@@ -17,9 +20,9 @@ Expected: `{"status":"UP"}` on both endpoints; app + Postgres 16 running.
 Seed one account (no account-create endpoint in O1 — single principal):
 
 ```bash
-docker compose exec postgres psql -U ledger -d ledger -c \
+docker compose -f ../docker-compose.yml exec postgres psql -U ledger -d ledger -c \
   "INSERT INTO account (id, display_name) VALUES ('11111111-1111-4111-8111-111111111111','demo')"
-docker compose exec postgres psql -U ledger -d ledger -c \
+docker compose -f ../docker-compose.yml exec postgres psql -U ledger -d ledger -c \
   "INSERT INTO capacity (account_id, total, reserved, committed) VALUES \
   ('11111111-1111-4111-8111-111111111111', 1000, 0, 0)"
 ```
@@ -57,8 +60,8 @@ KKEY=kill-reserve-1
 curl -sS -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
   -H "Idempotency-Key: $KKEY" \
   -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}" &
-sleep 0.05; docker compose kill app; wait || true
-docker compose up -d app
+sleep 0.05; docker compose -f ../docker-compose.yml kill app; wait || true
+docker compose -f ../docker-compose.yml up -d app
 curl -s -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
   -H "Idempotency-Key: $KKEY" \
   -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}"
@@ -66,15 +69,16 @@ curl -s localhost:8080/v1/operations/$KKEY
 curl -s "localhost:8080/v1/query?accountId=$ACCT"
 ```
 
-The timing smoke test above intentionally accepts either commit outcome. The deterministic
-seven-point PostgreSQL proof is `cd service && mvn -Dit.test=KillMidTxIT verify`; its matrix and
-the 32-writer concurrency evidence are in [the O1 docs](docs/README.md).
+The timing smoke test above intentionally accepts either commit outcome. From `service/`, use
+`./mvnw -Dit.test=KillMidTxIT,ProcessCrashIT verify -Pstrict` for injected transaction failures
+and actual application/PostgreSQL kills on disposable test infrastructure. The [O1 docs](docs/README.md)
+separate each failure model and its limitations from the 32-writer concurrency experiment.
 
 If the host already occupies 5432/8080, use overrides (defaults unchanged):
 
 ```bash
-POSTGRES_PORT=5433 APP_PORT=8081 docker compose -f ../docker-compose.yml up --build
-curl -s localhost:8081/health
+POSTGRES_PORT=5433 APP_PORT=8081 docker compose -f ../docker-compose.yml up --build -d
+curl --fail --retry 20 --retry-delay 1 --retry-connrefused -sS localhost:8081/health
 curl -s localhost:8081/ready
 ```
 
@@ -88,11 +92,12 @@ ls /usr/lib/jvm/temurin-25-jdk-amd64
 export JAVA_HOME=/usr/lib/jvm/temurin-25-jdk-amd64
 export PATH="$JAVA_HOME/bin:$PATH"
 java -version  # 25.x LTS
-mvn -v         # Maven 3.6.3+, JDK 25
+./mvnw -v      # from service/: pinned Maven 3.9.11, JDK 25
 ```
 
 - CI proves JDK 25 (`verify -Pstrict` required green). JDK 26 job is allowed-fail compat lane; no 26-only APIs, no preview APIs (`StructuredTaskScope`) on `main` — explicit `ExecutorService` lifecycle only.
-- Verify: `mvn -v` (JDK 25) + `mvn verify -Pstrict` log; ArchUnit test `DomainArchitectureTest` green.
+- Verify from `service/`: `./mvnw -v` (JDK 25) + `./mvnw clean verify -Pstrict`;
+  Java 26 requires `-Pstrict,compat26` and is not the release baseline.
 - O1-3 proof: `ReserveCommitSliceIT`, `IdempotencyConcurrentIT`, `OverCapacity409IT`, `KillMidTxIT`
   (all Testcontainers PG16). Concurrency choice: [DEC-LEDGER-04](docs/decisions/DEC-LEDGER-04-concurrency.md).
 

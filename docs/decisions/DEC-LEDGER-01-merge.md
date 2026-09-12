@@ -23,7 +23,9 @@ Single evolving repo, canonical layout:
 
 ## Consequences
 
-- `main` stays releasable; rollback = revert commit.
+- `main` stays releasable. A code revert is not a database rollback: preserve applied Flyway
+  migrations and use a tested compatible binary or a forward corrective migration. Restore is
+  a separate operational procedure, including reconciliation when external effects exist.
 - No per-directory versioning; one CI workflow gates all.
 - Placeholder directories do not participate in the current runtime path.
 - Future split (if repo grows) needs a new ADR; not assumed.

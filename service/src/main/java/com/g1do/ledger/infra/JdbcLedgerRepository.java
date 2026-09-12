@@ -45,6 +45,29 @@ public class JdbcLedgerRepository {
     return Optional.of(rows.get(0));
   }
 
+  public boolean claimOperation(UUID id, String key, String type, String requestHash) {
+    return jdbc.update(
+            "INSERT INTO operation (id, idempotency_key, type, status, request_hash)"
+                + " VALUES (?, ?, ?, 'PENDING', ?) ON CONFLICT (idempotency_key) DO NOTHING",
+            id,
+            key,
+            type,
+            requestHash)
+        == 1;
+  }
+
+  public void completeOperation(UUID id, String responseBody) {
+    int updated =
+        jdbc.update(
+            "UPDATE operation SET status = 'COMPLETED', response_body = ?::jsonb"
+                + " WHERE id = ? AND status = 'PENDING'",
+            responseBody,
+            id);
+    if (updated != 1) {
+      throw new IllegalStateException("Expected one pending operation to complete");
+    }
+  }
+
   public Optional<Map<String, Object>> lockReservation(UUID reservationId) {
     List<Map<String, Object>> rows =
         jdbc.queryForList(
@@ -55,19 +78,6 @@ public class JdbcLedgerRepository {
       return Optional.empty();
     }
     return Optional.of(rows.get(0));
-  }
-
-  public void insertOperation(
-      UUID id, String key, String type, String status, String requestHash, String responseBody) {
-    jdbc.update(
-        "INSERT INTO operation (id, idempotency_key, type, status, request_hash, response_body)"
-            + " VALUES (?, ?, ?, ?, ?, ?::jsonb)",
-        id,
-        key,
-        type,
-        status,
-        requestHash,
-        responseBody);
   }
 
   public String getOperationResponseBody(UUID id) {

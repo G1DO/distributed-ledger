@@ -29,12 +29,4 @@ public class QueryService {
         .map(row -> (String) row.get("response_body"))
         .orElseThrow(() -> new LedgerNotFoundException("operation not found: " + key));
   }
-
-  @Transactional(readOnly = true)
-  public String requestHashByKey(String key) {
-    return repository
-        .findOperationByKey(key)
-        .map(row -> (String) row.get("request_hash"))
-        .orElseThrow(() -> new LedgerNotFoundException("operation not found: " + key));
-  }
 }

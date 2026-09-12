@@ -6,11 +6,17 @@ uses `JdbcTemplate`; the domain package is kept independent of Spring and persis
 
 ## Components and flow
 
-`POST /v1/reserve` locks an account's capacity row, checks available capacity, then writes an
-operation, reservation, audit entry, and outbox row in one local transaction. `POST /v1/commit`
-locks the reservation and its capacity row, changes `RESERVED` to `COMMITTED`, moves the amount
-from `reserved` to `committed`, and writes its operation, audit entry, and outbox row in the same
-transaction. Query endpoints read persisted capacity or a stored operation response.
+Both commands first claim the unique operation key inside an explicit `READ COMMITTED`
+transaction. `INSERT ... ON CONFLICT DO NOTHING` waits for a concurrent owner; a subsequent
+statement reads its completed response or rejects a different command/body with `422`.
+Replay is resolved before inspecting mutable business state.
+
+For a new operation, `POST /v1/reserve` locks capacity and checks available units; commit locks
+the reservation, then capacity, and moves `reserved` to `committed`. Business, audit, outbox,
+and the completed stored response commit together. The internal `PENDING` claim never commits
+on its own; an exception or disconnected transaction rolls it back and frees the key for retry.
+Query endpoints read persisted capacity or a stored operation response. See
+[the operation-claim decision](../decisions/DEC-LEDGER-05-operation-claim.md).
 
 The outbox is storage only: records default to `dispatched=false`, and no relay worker is
 implemented. `control-plane/`, `simulation/`, and the non-PostgreSQL engine directories contain
