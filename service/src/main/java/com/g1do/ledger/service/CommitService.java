@@ -4,9 +4,9 @@ import com.g1do.ledger.domain.RequestHash;
 import com.g1do.ledger.domain.ReservationStatus;
 import com.g1do.ledger.infra.JdbcLedgerRepository;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -17,12 +17,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class CommitService {
 
   private final JdbcLedgerRepository repository;
+  private final OperationCoordinator operations;
 
-  public CommitService(JdbcLedgerRepository repository) {
+  public CommitService(JdbcLedgerRepository repository, OperationCoordinator operations) {
     this.repository = repository;
+    this.operations = operations;
   }
 
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public OperationResult commit(
       String reservationIdValue, String idempotencyKey, String headerKey) {
     SliceSupport.requireHeaderMatchesBody(headerKey, idempotencyKey);
@@ -31,14 +33,9 @@ public class CommitService {
     String canonical = RequestHash.canonicalCommit(reservationIdValue, idempotencyKey);
     String requestHash = RequestHash.sha256Hex(canonical);
 
-    Optional<Map<String, Object>> existing = repository.findOperationByKey(idempotencyKey);
-    if (existing.isPresent()) {
-      String storedHash = (String) existing.get().get("request_hash");
-      String storedBody = (String) existing.get().get("response_body");
-      if (!requestHash.equals(storedHash)) {
-        throw new HashMismatchException("Idempotency-Key reuse with different body");
-      }
-      return new OperationResult(storedBody, true);
+    OperationClaim claim = operations.claim("COMMIT", idempotencyKey, requestHash);
+    if (claim.replayed()) {
+      return claim.replay();
     }
 
     Map<String, Object> reservation =
@@ -63,7 +60,7 @@ public class CommitService {
     int committed = ((Number) capacity.get("committed")).intValue();
     int available = ((Number) capacity.get("available")).intValue();
 
-    UUID operationId = UUID.randomUUID();
+    UUID operationId = claim.operationId();
     UUID outboxId = UUID.randomUUID();
 
     String responseBody =
@@ -77,9 +74,6 @@ public class CommitService {
             + reservationIdValue
             + "\",\"status\":\"COMMITTED\"}";
 
-    repository.insertOperation(
-        operationId, idempotencyKey, "COMMIT", "COMPLETED", requestHash, responseBody);
-    String storedBody = repository.getOperationResponseBody(operationId);
     repository.updateReservationStatus(reservationId, "COMMITTED");
     repository.moveReservedToCommitted(accountId, amount);
 
@@ -100,6 +94,6 @@ public class CommitService {
             + "\"}";
     repository.insertOutbox(outboxId, "commit", outboxPayload);
 
-    return new OperationResult(storedBody, false);
+    return new OperationResult(operations.complete(operationId, responseBody), false);
   }
 }
