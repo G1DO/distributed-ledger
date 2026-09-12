@@ -1,12 +1,15 @@
 # Development and testing
 
-Use JDK 25, Docker, and the checked-in Maven wrapper. From `service/`, run:
+Use JDK 25, Docker, `unzip` on Unix, and the checked-in Maven wrapper. From `service/`, run:
 
 ```bash
 ./mvnw clean verify -Pstrict
 ```
 
-The wrapper pins Maven 3.9.11 and validates its download with SHA-256. The `validate` phase
+The wrapper pins Maven 3.9.11 and validates its ZIP download with SHA-256. On Unix, `unzip`
+must be installed: wrapper 3.3.4 otherwise switches archives to TAR.GZ, which correctly fails
+the ZIP checksum. The Docker build installs `unzip`; do not remove checksum verification.
+The `validate` phase
 requires Java 25 and that Maven version, before compilation. `strict` additionally rejects
 SNAPSHOT dependencies, including transitive dependencies. Verification also runs Spotless,
 Checkstyle, and ArchUnit. Do not suppress Mockito's static agent or enable preview APIs.

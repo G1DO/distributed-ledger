@@ -1,4 +1,6 @@
 FROM maven:3.9-eclipse-temurin-25 AS build
+# The wrapper's pinned checksum is for the ZIP; without unzip it switches to TAR.GZ.
+RUN apt-get update && apt-get install -y --no-install-recommends unzip && apt-get clean
 WORKDIR /build
 COPY service/pom.xml service/pom.xml
 COPY service/mvnw service/mvnw
