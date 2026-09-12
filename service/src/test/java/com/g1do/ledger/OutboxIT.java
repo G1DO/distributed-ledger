@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 /**
- * outbox is table-only in O1 (no relay worker): rows default to undispatched, payload is mandatory,
- * and app_role can stage plus mark rows dispatched for the O1-3 same-tx pattern.
+ * outbox is table-only (no relay worker): rows default to undispatched, payload is mandatory, and
+ * app_role can stage plus mark rows dispatched for the same-tx pattern.
  */
 class OutboxIT extends PostgresITBase {
 

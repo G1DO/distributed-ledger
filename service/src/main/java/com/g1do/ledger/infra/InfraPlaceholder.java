@@ -1,6 +1,6 @@
 package com.g1do.ledger.infra;
 
-/** Infrastructure placeholder (repositories, Flyway). No tables in O1-1. */
+/** Infrastructure placeholder (repositories, Flyway). */
 public final class InfraPlaceholder {
   private InfraPlaceholder() {}
 }

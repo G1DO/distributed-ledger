@@ -6,15 +6,18 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @SpringBootTest(
     classes = LedgerApplication.class,
-    webEnvironment = SpringBootTest.WebEnvironment.NONE)
+    webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@AutoConfigureMockMvc
 public abstract class PostgresITBase {
 
   /**
@@ -42,6 +45,8 @@ public abstract class PostgresITBase {
   }
 
   @Autowired protected JdbcTemplate jdbc;
+
+  @Autowired protected MockMvc mockMvc;
 
   /**
    * Explicit app_role connection. The Spring datasource already runs as app_role, but this

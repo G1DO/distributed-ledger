@@ -15,7 +15,7 @@
   <artifactId>ledger-service</artifactId>
   <version>0.1.0</version>
   <name>ledger-service</name>
-  <description>Distributed ledger service skeleton (O1-1).</description>
+  <description>Distributed ledger service skeleton.</description>
 
   <properties>
     <java.version>25</java.version>

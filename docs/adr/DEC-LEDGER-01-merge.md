@@ -4,7 +4,7 @@ Status: accepted. Date: 2026-09-10.
 
 ## Context
 
-O1 needs one place for spec, service, engines, control-plane stub, and
+The project needs one place for spec, service, engines, control-plane stub, and
 simulation stub with a single CI signal. Alternatives were poly-repo
 (spec/service/engines split) and mono-repo with independent versioning.
 
@@ -23,7 +23,7 @@ Single evolving repo, canonical layout:
 
 ## Consequences
 
-- `main` stays releasable from O1-1 on; rollback = revert commit.
+- `main` stays releasable; rollback = revert commit.
 - No per-directory versioning; one CI workflow gates all.
 - `engines/raft-lab` MUST NOT affect prod paths; lab flag required.
 - Future split (if repo grows) needs a new ADR; not assumed.
