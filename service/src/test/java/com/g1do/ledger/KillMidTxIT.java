@@ -1,97 +1,222 @@
 package com.g1do.ledger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.g1do.ledger.service.OperationResult;
+import com.g1do.ledger.service.ReserveService;
+import com.g1do.ledger.service.TransactionCheckpoint;
+import com.g1do.ledger.service.TransactionProbe;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.MediaType;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 
 /**
- * Kill mid-transaction: a rolled-back (crashed) tx leaves no partial drift — sums stay consistent,
- * capacity stays nonnegative, and no orphan reservation survives without its operation.
+ * Seven-point crash matrix for a reserve. Pre-commit failures are injected into the real service
+ * transaction; the connection-loss case closes a JDBC transaction without committing. A caller that
+ * loses its response after commit proves durability by replaying the same key.
  */
+@Import(KillMidTxIT.FailureInjectionConfiguration.class)
 class KillMidTxIT extends PostgresITBase {
 
+  @Autowired private ReserveService reserveService;
+
+  @Autowired private ControlledTransactionProbe transactionProbe;
+
+  @AfterEach
+  void clearFailure() {
+    transactionProbe.clear();
+  }
+
   @Test
-  void rolledBackTxLeavesNoPartialDrift() throws Exception {
+  void crashMatrixLeavesNoPartialStateAndReplayIsSafe() {
+    for (TransactionCheckpoint checkpoint : TransactionCheckpoint.values()) {
+      UUID accountId = account("failpoint-" + checkpoint.name());
+      String key = "c-" + checkpoint.ordinal() + "-" + UUID.randomUUID();
+
+      transactionProbe.failAt(checkpoint);
+      assertThatThrownBy(() -> reserveService.reserve(accountId.toString(), 100, key, null, key))
+          .isInstanceOf(SimulatedRequestFailure.class);
+
+      assertNoPartialReserve(accountId, key);
+      transactionProbe.clear();
+      assertReplayCreatesExactlyOneReserve(accountId, key);
+    }
+  }
+
+  @Test
+  void beforeTransactionHasNoStateAndAReplayCreatesOneReserve() {
+    UUID accountId = account("before-transaction");
+    String key = "crash-before-tx-" + UUID.randomUUID();
+
+    assertNoPartialReserve(accountId, key);
+    assertReplayCreatesExactlyOneReserve(accountId, key);
+  }
+
+  @Test
+  void connectionLossBeforeCommitRollsBackAllWrites() throws Exception {
+    UUID accountId = account("connection-loss");
+    String key = "crash-disconnect-" + UUID.randomUUID();
+
+    Connection connection = appConnection();
+    connection.setAutoCommit(false);
+    try {
+      insertReserveRows(connection, accountId, key);
+      // Closing an uncommitted PostgreSQL session is the database-level equivalent of a process
+      // disconnect: PostgreSQL aborts the transaction before releasing its locks.
+    } finally {
+      connection.close();
+    }
+
+    assertNoPartialReserve(accountId, key);
+    assertReplayCreatesExactlyOneReserve(accountId, key);
+  }
+
+  @Test
+  void responseLostAfterCommitReplaysThePersistedResult() {
+    UUID accountId = account("after-commit");
+    String key = "crash-after-commit-" + UUID.randomUUID();
+
+    OperationResult committed = reserveService.reserve(accountId.toString(), 100, key, null, key);
+    OperationResult replay = reserveService.reserve(accountId.toString(), 100, key, null, key);
+
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.responseBody()).isEqualTo(committed.responseBody());
+    assertExactlyOneReserve(accountId, key);
+  }
+
+  private UUID account(String displayName) {
     UUID accountId = UUID.randomUUID();
-    jdbc.update("INSERT INTO account (id, display_name) VALUES (?, ?)", accountId, "kill-test");
+    jdbc.update("INSERT INTO account (id, display_name) VALUES (?, ?)", accountId, displayName);
     jdbc.update(
         "INSERT INTO capacity (account_id, total, reserved, committed) VALUES (?, 500, 0, 0)",
         accountId);
+    return accountId;
+  }
 
+  private void assertReplayCreatesExactlyOneReserve(UUID accountId, String key) {
+    OperationResult first = reserveService.reserve(accountId.toString(), 100, key, null, key);
+    OperationResult replay = reserveService.reserve(accountId.toString(), 100, key, null, key);
+    assertThat(first.replayed()).isFalse();
+    assertThat(replay.replayed()).isTrue();
+    assertThat(replay.responseBody()).isEqualTo(first.responseBody());
+    assertExactlyOneReserve(accountId, key);
+  }
+
+  private void assertNoPartialReserve(UUID accountId, String key) {
+    Integer operations = count("SELECT COUNT(*) FROM operation WHERE idempotency_key = ?", key);
+    Integer reservations =
+        count("SELECT COUNT(*) FROM reservation WHERE account_id = ?", accountId);
+    Integer audits = count("SELECT COUNT(*) FROM audit_entry WHERE account_id = ?", accountId);
+    Integer outbox =
+        count(
+            "SELECT COUNT(*) FROM outbox WHERE payload ->> 'accountId' = ?", accountId.toString());
+    Map<String, Object> capacity = capacity(accountId);
+
+    assertThat(operations).isZero();
+    assertThat(reservations).isZero();
+    assertThat(audits).isZero();
+    assertThat(outbox).isZero();
+    assertThat(((Number) capacity.get("total")).intValue()).isEqualTo(500);
+    assertThat(((Number) capacity.get("reserved")).intValue()).isZero();
+    assertThat(((Number) capacity.get("committed")).intValue()).isZero();
+    assertThat(((Number) capacity.get("available")).intValue()).isEqualTo(500);
+  }
+
+  private void assertExactlyOneReserve(UUID accountId, String key) {
+    assertThat(count("SELECT COUNT(*) FROM operation WHERE idempotency_key = ?", key)).isEqualTo(1);
+    assertThat(count("SELECT COUNT(*) FROM reservation WHERE account_id = ?", accountId))
+        .isEqualTo(1);
+    assertThat(count("SELECT COUNT(*) FROM audit_entry WHERE account_id = ?", accountId))
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "SELECT COUNT(*) FROM outbox WHERE payload ->> 'accountId' = ?",
+                accountId.toString()))
+        .isEqualTo(1);
+    Map<String, Object> capacity = capacity(accountId);
+    assertThat(((Number) capacity.get("reserved")).intValue()).isEqualTo(100);
+    assertThat(((Number) capacity.get("available")).intValue()).isEqualTo(400);
+  }
+
+  private Integer count(String sql, Object parameter) {
+    return jdbc.queryForObject(sql, Integer.class, parameter);
+  }
+
+  private Map<String, Object> capacity(UUID accountId) {
+    return jdbc.queryForMap(
+        "SELECT total, reserved, committed, available FROM capacity WHERE account_id = ?",
+        accountId);
+  }
+
+  private void insertReserveRows(Connection connection, UUID accountId, String key)
+      throws Exception {
     UUID operationId = UUID.randomUUID();
     UUID reservationId = UUID.randomUUID();
-    try (Connection connection = appConnection()) {
-      connection.setAutoCommit(false);
-      try (PreparedStatement operation =
-          connection.prepareStatement(
-              "INSERT INTO operation (id, idempotency_key, type, status, request_hash)"
-                  + " VALUES (?, ?, 'RESERVE', 'PENDING', 'hash-crash')")) {
-        operation.setObject(1, operationId);
-        operation.setString(2, "crash-" + UUID.randomUUID());
-        operation.executeUpdate();
-      }
-      try (PreparedStatement reservation =
-          connection.prepareStatement(
-              "INSERT INTO reservation (id, account_id, operation_id, amount, status)"
-                  + " VALUES (?, ?, ?, ?, 'RESERVED')")) {
-        reservation.setObject(1, reservationId);
-        reservation.setObject(2, accountId);
-        reservation.setObject(3, operationId);
-        reservation.setInt(4, 100);
-        reservation.executeUpdate();
-      }
-      connection.rollback();
+    try (PreparedStatement capacity =
+            connection.prepareStatement(
+                "UPDATE capacity SET reserved = reserved + 100 WHERE account_id = ?");
+        PreparedStatement operation =
+            connection.prepareStatement(
+                "INSERT INTO operation (id, idempotency_key, type, status, request_hash, response_body)"
+                    + " VALUES (?, ?, 'RESERVE', 'COMPLETED', 'disconnect-hash', '{}'::jsonb)");
+        PreparedStatement reservation =
+            connection.prepareStatement(
+                "INSERT INTO reservation (id, account_id, operation_id, amount, status)"
+                    + " VALUES (?, ?, ?, 100, 'RESERVED')")) {
+      capacity.setObject(1, accountId);
+      capacity.executeUpdate();
+      operation.setObject(1, operationId);
+      operation.setString(2, key);
+      operation.executeUpdate();
+      reservation.setObject(1, reservationId);
+      reservation.setObject(2, accountId);
+      reservation.setObject(3, operationId);
+      reservation.executeUpdate();
+    }
+  }
+
+  @TestConfiguration
+  static class FailureInjectionConfiguration {
+    @Bean
+    @Primary
+    ControlledTransactionProbe controlledTransactionProbe() {
+      return new ControlledTransactionProbe();
+    }
+  }
+
+  static class ControlledTransactionProbe implements TransactionProbe {
+    private final ThreadLocal<EnumSet<TransactionCheckpoint>> failures =
+        ThreadLocal.withInitial(() -> EnumSet.noneOf(TransactionCheckpoint.class));
+
+    void failAt(TransactionCheckpoint checkpoint) {
+      failures.get().add(checkpoint);
     }
 
-    Map<String, Object> capacity =
-        jdbc.queryForMap(
-            "SELECT total, reserved, committed, available FROM capacity WHERE account_id = ?",
-            accountId);
-    assertThat(((Number) capacity.get("total")).intValue()).isEqualTo(500);
-    assertThat(((Number) capacity.get("reserved")).intValue()).isEqualTo(0);
-    assertThat(((Number) capacity.get("committed")).intValue()).isEqualTo(0);
-    assertThat(((Number) capacity.get("available")).intValue()).isEqualTo(500);
+    void clear() {
+      failures.remove();
+    }
 
-    Integer orphans =
-        jdbc.queryForObject(
-            "SELECT COUNT(*) FROM reservation r LEFT JOIN operation o ON r.operation_id = o.id"
-                + " WHERE o.id IS NULL",
-            Integer.class);
-    assertThat(orphans).isEqualTo(0);
+    @Override
+    public void reached(TransactionCheckpoint checkpoint) {
+      if (failures.get().contains(checkpoint)) {
+        throw new SimulatedRequestFailure(checkpoint);
+      }
+    }
+  }
 
-    Integer crashedReservations =
-        jdbc.queryForObject(
-            "SELECT COUNT(*) FROM reservation WHERE id = ?", Integer.class, reservationId);
-    assertThat(crashedReservations).isEqualTo(0);
-
-    String key = "after-crash-" + UUID.randomUUID();
-    String body =
-        "{\"accountId\":\"" + accountId + "\",\"amount\":100,\"idempotencyKey\":\"" + key + "\"}";
-    mockMvc
-        .perform(
-            post("/v1/reserve")
-                .header("Idempotency-Key", key)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-        .andExpect(status().isCreated());
-
-    Map<String, Object> after =
-        jdbc.queryForMap(
-            "SELECT total, reserved, committed, available FROM capacity WHERE account_id = ?",
-            accountId);
-    int reserved = ((Number) after.get("reserved")).intValue();
-    int committed = ((Number) after.get("committed")).intValue();
-    int total = ((Number) after.get("total")).intValue();
-    int available = ((Number) after.get("available")).intValue();
-    assertThat(reserved + committed).isEqualTo(100);
-    assertThat(total - reserved - committed).isEqualTo(available);
-    assertThat(available).isGreaterThanOrEqualTo(0);
+  static class SimulatedRequestFailure extends RuntimeException {
+    SimulatedRequestFailure(TransactionCheckpoint checkpoint) {
+      super("simulated failure at " + checkpoint);
+    }
   }
 }
