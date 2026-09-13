@@ -10,3 +10,4 @@
 - [O1 concurrency investigation](perf/o1-concurrency.md) — 32-writer comparison and raw result.
 - [O1 crash matrix](runbooks/o1-crash-matrix.md) — transaction failure and replay proof.
 - [Decisions](decisions/) — accepted architectural decisions.
+- [O2 Design RFC](design/rfcs/o2-transfer-expiry.md) — transfer accounting, lock ordering, and expiry semantics.
