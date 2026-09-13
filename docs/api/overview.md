@@ -18,6 +18,8 @@ authentication or authorization layer.
   - reserve canonical: `{"accountId":"...","amount":N,"idempotencyKey":"...","ttlSec":T?}`
     (keys sorted, `ttlSec` omitted when null).
   - commit canonical: `{"idempotencyKey":"...","reservationId":"..."}`.
+  - release canonical: `{"idempotencyKey":"...","reservationId":"..."}` (O2 specification).
+  - transfer canonical: `{"amount":N,"fromAccountId":"...","idempotencyKey":"...","toAccountId":"..."}` (keys sorted, O2 specification).
 - Every mutating response persists `response_body` (JSONB) before commit and replays the stored
   text verbatim. Postgres JSONB normalizes formatting on write; the first response is read back
   from the stored row, so first / replay / `GET /operations/{key}` are byte-identical.
@@ -33,8 +35,8 @@ authentication or authorization layer.
 
 Request: `{ "accountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64", "ttlSec": 3600? }`
 
-`ttlSec`, when supplied, must be at least 1 and participates in the request hash. The O1 slice does not
-persist it or run an expiry process; it has no reservation-expiry effect.
+`ttlSec`, when supplied, must be at least 1 and participates in the request hash. O1 does not run
+an expiry process; O2 defines authoritative DB `now()` expiry and scheduled reaper.
 
 - `201` first commit: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"uuid-v4","status":"RESERVED" }` (JSONB-normalized formatting).
@@ -55,14 +57,40 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 - `200` first + replay: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"...","status":"COMMITTED" }`.
 - Replay same key+same hash → original body, no second `audit_entry`, no double decrement.
-- `409` reservation already `COMMITTED` (second effect impossible) or capacity violated.
+- `409` reservation already terminal (`COMMITTED`, `RELEASED`, `EXPIRED`) or capacity violated.
 - `422` same key + different hash. `404` unknown reservation.
 - Atomically `RESERVED -> COMMITTED`: claim operation and resolve replay/mismatch, then lock
   `reservation` + `capacity FOR UPDATE`,
   `UPDATE reservation SET COMMITTED`, `reserved -= amount, committed += amount`
   (`SUM` stable), insert `outbox` + `audit_entry(kind=COMMIT)`, and complete the operation same tx.
-- The implemented state transition is `RESERVED -> COMMITTED`; there is no release, transfer, or
-  expiry operation.
+
+### `POST /v1/release` (O2 design draft)
+
+Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
+
+- `200` first + replay: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
+  "reservationId":"...","status":"RELEASED" }`.
+- Replay same key+same hash → original body, no second `audit_entry`, no second increment.
+- `409` reservation already in a terminal state (`COMMITTED`, `RELEASED`, `EXPIRED`).
+- `422` same key + different hash. `404` unknown reservation.
+- Atomically `RESERVED -> RELEASED`: claim operation and resolve replay/mismatch, lock
+  `reservation` + `capacity FOR UPDATE`, `UPDATE reservation SET RELEASED`, `reserved -= amount`
+  (`available += amount`), insert `outbox` + `audit_entry(kind=RELEASE)`, and complete operation same tx.
+
+### `POST /v1/transfer` (O2 design draft)
+
+Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64" }`
+
+- `200` first + replay: `{ "fromAccountId":"...","toAccountId":"...","amount":100,
+  "idempotencyKey":"...","status":"TRANSFERRED" }`.
+- Replay same key+same hash → original body, no second transfer effect.
+- `409` insufficient source available capacity (`available < amount`) or destination capacity overflow (`total + amount > INT_MAX`).
+- `422` same key + different hash.
+- `400` same-account transfer (`fromAccountId == toAccountId`), `amount <= 0`, invalid UUID, or missing headers.
+- `404` unknown `fromAccountId` or `toAccountId`.
+- Atomically moves capacity: claim operation → resolve replay/mismatch → lock capacities in ascending UUID order
+  `ORDER BY account_id ASC FOR UPDATE` → validate balances → debit source `total -= amount` and credit destination
+  `total += amount` → insert `outbox` + `audit_entry(kind=TRANSFER)` → complete operation same tx.
 
 ### `GET /v1/query?accountId=`
 
@@ -78,7 +106,7 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 
 - `200`: `{ "status": "UP" }`. No auth. `/ready` does not gate on DB.
 
-## Not implemented
+## Planned / Not implemented
 
-There is no release/transfer/expiry worker, HTTP authentication or RBAC, metrics/tracing/alerts,
-or outbox relay worker. The outbox is table-only and defaults to `dispatched=false`.
+HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
+See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../design/rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md).
