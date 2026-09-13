@@ -12,6 +12,7 @@ alone or rename old records and break their links.
 | Six-table schema | [03](DEC-LEDGER-03-schema.md) | Not the concurrency investigation |
 | Concurrency | [04](DEC-LEDGER-04-concurrency.md) | [DEC-LEDGER-03 investigation](https://app.notion.com/p/3d60a821b3cc816d9af3dfbbf7b8898d) |
 | Operation-first claim | [05](DEC-LEDGER-05-operation-claim.md) | Not the blueprint's historical invariant-scope reference |
+| Lock order and expiry clock | [06](DEC-LEDGER-06-lock-order-expiry-clock.md) | O2 design baseline |
 | PITR and reconciliation | Planned, no implementation ADR yet | [DEC-LEDGER-04 PITR](https://app.notion.com/p/3d60a821b3cc81ca9ffcee867d582a6e) |
 
 The [approved delivery plan](https://app.notion.com/p/3d90a821b3cc81b4a5a4f62fa6dd30a3)
