@@ -1,16 +1,18 @@
 package com.g1do.ledger.domain;
 
 /**
- * O1 state machine subset: {@code RESERVED -> COMMITTED} only. No Release/Transfer (O2). Pure Java,
- * Spring-free.
+ * Reservation states. Release and commit are implemented; expiry execution is reserved for O2-3.
+ * Pure Java, Spring-free.
  */
 public enum ReservationStatus {
   RESERVED,
-  COMMITTED;
+  COMMITTED,
+  RELEASED,
+  EXPIRED;
 
-  /** Returns true only for the single legal O1 transition. */
+  /** Only an active reservation can reach a terminal state. */
   public boolean canTransitionTo(ReservationStatus next) {
-    return this == RESERVED && next == COMMITTED;
+    return this == RESERVED && (next == COMMITTED || next == RELEASED || next == EXPIRED);
   }
 
   public static ReservationStatus parse(String value) {

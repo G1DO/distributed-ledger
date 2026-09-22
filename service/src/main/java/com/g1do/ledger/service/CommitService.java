@@ -48,7 +48,9 @@ public class CommitService {
     String statusValue = (String) reservation.get("status");
     ReservationStatus current = ReservationStatus.parse(statusValue);
     if (!current.canTransitionTo(ReservationStatus.COMMITTED)) {
-      throw new LedgerConflictException("Reservation already committed: " + reservationIdValue);
+      String reason = current == ReservationStatus.COMMITTED ? "committed" : "terminal";
+      throw new LedgerConflictException(
+          "Reservation already " + reason + ": " + reservationIdValue);
     }
 
     Map<String, Object> capacity =
