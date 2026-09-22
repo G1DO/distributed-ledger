@@ -117,6 +117,13 @@ public class JdbcLedgerRepository {
         accountId);
   }
 
+  public void releaseReserved(UUID accountId, int amount) {
+    jdbc.update(
+        "UPDATE capacity SET reserved = reserved - ?, version = version + 1 WHERE account_id = ?",
+        amount,
+        accountId);
+  }
+
   public void insertOutbox(UUID id, String aggregate, String payloadJson) {
     jdbc.update(
         "INSERT INTO outbox (id, aggregate, payload) VALUES (?, ?, ?::jsonb)",
