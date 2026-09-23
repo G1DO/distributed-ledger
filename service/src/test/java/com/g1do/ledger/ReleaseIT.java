@@ -138,7 +138,7 @@ class ReleaseIT extends PostgresITBase {
     UUID account = account(100);
     UUID reservation = reserve(account, 100);
     if (terminal.equals("EXPIRED")) {
-      // O2-3 will produce this state. Here only recognition and immutability are under test.
+      // Seed the terminal fixture; expiry execution is covered by the expiry integration tests.
       jdbc.update("UPDATE reservation SET status = 'EXPIRED' WHERE id = ?", reservation);
       jdbc.update("UPDATE capacity SET reserved = 0 WHERE account_id = ?", account);
     } else {
