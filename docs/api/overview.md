@@ -37,9 +37,10 @@ authentication or authorization layer.
 
 Request: `{ "accountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64", "ttlSec": 3600? }`
 
-`ttlSec`, when supplied, must be at least 1 and participates in the request hash. It does not yet
-set an expiration deadline: reservations are stored with `expires_at = NULL`, meaning never
-expires. Lazy expiry and the scheduled reaper remain O2-3 scope.
+`ttlSec`, when supplied, must be at least 1 and participates in the request hash. Reserve stores
+`expires_at = now() + ttlSec` seconds, using PostgreSQL's transaction-start timestamp. Missing
+or null `ttlSec` stores `expires_at = NULL`, meaning never expires, including existing reservations.
+Replaying Reserve preserves its original response and deadline; it does not renew the TTL.
 
 - `201` first commit: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"uuid-v4","status":"RESERVED" }` (JSONB-normalized formatting).
@@ -60,7 +61,8 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 - `200` first + replay: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"...","status":"COMMITTED" }`.
 - Replay same key+same hash → original body, no second `audit_entry`, no double decrement.
-- `409` reservation already terminal (`COMMITTED`, `RELEASED`, `EXPIRED`) or capacity violated.
+- `409` reservation already terminal (`COMMITTED`, `RELEASED`, `EXPIRED`), deadline reached,
+  or capacity violated.
 - `422` same key + different hash. `404` unknown reservation.
 - Atomically `RESERVED -> COMMITTED`: claim operation and resolve replay/mismatch, then lock
   `reservation` + `capacity FOR UPDATE`,
@@ -75,7 +77,7 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
   "reservationId":"...","status":"RELEASED" }`.
 - Replay same key+same command+same hash → original body, no second audit/outbox row or capacity change.
 - `409` reservation already in a terminal state (`COMMITTED`, `RELEASED`, `EXPIRED`) under a new
-  key, or a capacity constraint violation.
+  key, deadline reached, or a capacity constraint violation.
 - `422` same key + different command or hash. `404` unknown reservation.
 - `400` missing/invalid header, body, UUIDv4, or a header/body key mismatch.
 - Atomically `RESERVED -> RELEASED`: claim operation and resolve replay/mismatch, lock
@@ -87,12 +89,26 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
   outbox payload contains `accountId`, `amount`, `operationId`, and `reservationId`. The completed
   `operation(type=RELEASE)` stores the response before commit. Failure rolls back the operation
   claim and all effects.
-- Commit versus Release on one reservation produces one terminal transition: the winner returns
+- Commit versus Release on a non-due reservation produces one terminal transition: the winner returns
   `200`; the competing command with a different key returns `409` after observing that state.
   Only the winner changes capacity or inserts audit/outbox rows. Concurrent same-key Releases
   return the same `200` body with one effect.
-- `EXPIRED` is recognized as terminal, but this slice does not create expiry transitions or
-  evaluate deadlines.
+
+### Expiry on Commit and Release
+
+Both commands resolve operation replay or mismatch before locking the reservation. For a new
+command, a `RESERVED` row with `expires_at <= now()` is due; `now()` is the PostgreSQL timestamp
+at the start of that command's transaction, even if it waits for a lock. The rejected command
+rolls back, freeing its key. A separate expiry transaction then claims an internal operation,
+locks and rechecks the reservation, and commits `EXPIRED` with its capacity, audit, and outbox
+effects before the command returns `409`. A concurrent terminal winner is left unchanged.
+Failure in the expiry transaction rolls back all its effects and is eligible for a later retry.
+
+Expiry decrements `reserved`, increases `available`, and leaves `total` and `committed` unchanged.
+Exactly one `audit_entry(kind=EXPIRE)` and one `outbox(aggregate='reservation', dispatched=false)`
+with `status='EXPIRED'` in its payload commit with each expiry transition. Concurrent or repeated
+checks do not duplicate these effects. Stored Reserve, Commit, and Release responses remain
+immutable; replay still returns the original response even after the reservation's deadline.
 
 ### `POST /v1/transfer`
 
@@ -131,12 +147,15 @@ Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100,
 ### `GET /v1/query?accountId=`
 
 - `200`: `{ "accountId":"...","total":N,"reserved":N,"committed":N,"available":N }`.
-  It reflects the current persisted capacity. `400` invalid UUIDv4; `404` unknown account.
+  Before reading capacity, expires due `RESERVED` rows for that account, each in its own
+  transaction. The returned counters reflect those committed effects; concurrent operations
+  may still change capacity. `400` invalid UUIDv4; `404` unknown account.
 
 ### `GET /v1/operations/{key}`
 
 - `200`: persisted `response_body` verbatim. `404` unknown key.
-- This is an idempotent operation-response lookup, not an audit-entry query.
+- This is an idempotent operation-response lookup, not an audit-entry query. It does not trigger
+  expiry or rewrite a stored response to reflect current reservation status.
 
 ### `GET /health`, `GET /ready`
 
@@ -144,5 +163,5 @@ Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100,
 
 ## Planned / Not implemented
 
-Expiry (O2-3), HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
+HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
 See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../design/rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md).

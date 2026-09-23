@@ -17,7 +17,7 @@ local `pgdata` volume predates the migration's role setup, remove that local vol
 `V2__release_terminal_states.sql` extends the reservation status check to allow `RELEASED` and
 `EXPIRED`, preserving `RESERVED` and `COMMITTED`. `EXPIRED` is reserved for O2-3; V2 does not
 add lazy expiry or a reaper. The migration also documents `expires_at IS NULL` as never expires.
-It does not backfill deadlines or change existing reservations, and Reserve still stores NULL.
+It does not backfill deadlines or change existing reservations; the V2-era Reserve stores NULL.
 V1 and the capacity checks and append-only audit permissions remain unchanged.
 
 Stop all old application instances before applying V2, then start the Release-capable version.
@@ -43,3 +43,23 @@ To withdraw the endpoint, deploy the preceding Release-capable application, reta
 all committed transfer, audit, and outbox history. Reverting application code does not undo
 transferred balances. If a later rollback requires schema or data compensation, use a new
 forward migration that preserves accounting and audit history, never a rewritten V1/V2.
+
+## Expiry rollout (V3)
+
+`V3__reservation_expiry.sql` adds a partial index for due `RESERVED` reservations with non-NULL
+`expires_at` and updates the column comment. It adds no timestamp column and performs no
+deadline backfill. Existing
+NULL deadlines remain never-expire, including reservations whose original request supplied a
+TTL before deadline storage was implemented. A new Reserve with a TTL stores PostgreSQL
+`now() + ttlSec` seconds; replay leaves the existing deadline unchanged.
+
+Stop the preceding application, apply migrations, and start one expiry-capable node with the
+scheduler enabled (the default). Avoid mixed versions: the previous application recognizes
+`EXPIRED` but does not enforce deadlines. Check pending deadlines before rollout, since due
+non-NULL reservations will now expire. See the [expiry runbook](../operations/runbooks/o2-expiry-reaper.md).
+
+To roll back the application, disable the scheduler and deploy the preceding V2-compatible
+Release/Transfer version, retaining V3 and all committed state. Disabling the scheduler alone
+keeps lazy expiry active; reverting the application pauses deadline enforcement. Expired rows
+remain `EXPIRED`, their released capacity remains available, and audit/outbox history remains
+intact. Never reactivate expired rows or reverse applied migrations to undo expiry.

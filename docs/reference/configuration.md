@@ -19,3 +19,21 @@ below. The Docker Compose defaults are for local development only.
 `docker-compose.yml` overrides the app connection to `app_role` / `app` and keeps Flyway on
 `ledger` / `ledger`. The V1 migration embeds local-only role passwords; do not treat these values
 as a production secret-management solution.
+
+## Expiry reaper
+
+| Property | Environment variable | Default | Purpose |
+| --- | --- | --- | --- |
+| `ledger.expiry.enabled` | `LEDGER_EXPIRY_ENABLED` | `true` | Enables the single-node background scheduler |
+| `ledger.expiry.interval-ms` | `LEDGER_EXPIRY_INTERVAL_MS` | `1000` | Fixed delay in milliseconds between completed sweeps |
+| `ledger.expiry.batch-size` | `LEDGER_EXPIRY_BATCH_SIZE` | `100` | Maximum candidates examined per scheduled sweep |
+| `ledger.expiry.lock-timeout-ms` | `LEDGER_EXPIRY_LOCK_TIMEOUT_MS` | `100` | PostgreSQL lock timeout in milliseconds for each background expiry transaction |
+
+Interval, batch size, and lock timeout must be positive. Each candidate has its own short
+transaction; locked reservations are skipped and capacity-lock timeouts roll back that item for
+a later sweep. The background timeout does not change user transaction lock timeouts.
+Run the scheduler on one application node only; there is no distributed scheduler lock.
+
+Set `LEDGER_EXPIRY_ENABLED=false` and restart to stop background sweeps. Lazy expiry on capacity
+queries, Commit, and Release remains active. See the [expiry runbook](../operations/runbooks/o2-expiry-reaper.md)
+for rollout, recovery, and rollback.
