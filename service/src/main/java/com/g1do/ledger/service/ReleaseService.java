@@ -6,8 +6,6 @@ import com.g1do.ledger.infra.JdbcLedgerRepository;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
 
 /** Release reserved capacity with one atomic operation, audit, and outbox effect. */
 @Service
@@ -15,17 +13,26 @@ public class ReleaseService {
 
   private final JdbcLedgerRepository repository;
   private final OperationCoordinator operations;
+  private final ExpiryService expiry;
 
-  public ReleaseService(JdbcLedgerRepository repository, OperationCoordinator operations) {
+  public ReleaseService(
+      JdbcLedgerRepository repository, OperationCoordinator operations, ExpiryService expiry) {
     this.repository = repository;
     this.operations = operations;
+    this.expiry = expiry;
   }
 
-  @Transactional(isolation = Isolation.READ_COMMITTED)
   public OperationResult release(
       String reservationIdValue, String idempotencyKey, String headerKey) {
     SliceSupport.requireHeaderMatchesBody(headerKey, idempotencyKey);
     UUID reservationId = SliceSupport.requireUuidV4(reservationIdValue, "reservationId");
+    return expiry.executeTerminal(
+        reservationId,
+        () -> releaseInTransaction(reservationIdValue, reservationId, idempotencyKey));
+  }
+
+  private OperationResult releaseInTransaction(
+      String reservationIdValue, UUID reservationId, String idempotencyKey) {
     String requestHash =
         RequestHash.sha256Hex(RequestHash.canonicalRelease(reservationIdValue, idempotencyKey));
 
@@ -39,6 +46,7 @@ public class ReleaseService {
             .lockReservation(reservationId)
             .orElseThrow(
                 () -> new LedgerNotFoundException("reservation not found: " + reservationIdValue));
+    expiry.rejectIfDue(reservation);
     ReservationStatus current = ReservationStatus.parse((String) reservation.get("status"));
     if (!current.canTransitionTo(ReservationStatus.RELEASED)) {
       throw new LedgerConflictException("Reservation already terminal: " + reservationIdValue);

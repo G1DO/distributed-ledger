@@ -87,6 +87,7 @@ class ReleaseMigrationIT {
                 .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .defaultSchema(schema)
                 .schemas(schema)
+                .target("2")
                 .load()
                 .migrate();
         assertThat(migrated.migrationsExecuted).isEqualTo(1);
@@ -95,6 +96,28 @@ class ReleaseMigrationIT {
                 assertThat(jdbc.queryForList("SELECT * FROM " + table))
                     .as("preserved %s rows", table)
                     .containsExactlyInAnyOrderElementsOf(rows));
+
+        var expiryMigration =
+            Flyway.configure()
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+                .defaultSchema(schema)
+                .schemas(schema)
+                .target("3")
+                .load()
+                .migrate();
+        assertThat(expiryMigration.migrationsExecuted).isEqualTo(1);
+        original.forEach(
+            (table, rows) ->
+                assertThat(jdbc.queryForList("SELECT * FROM " + table))
+                    .as("expiry migration preserved %s rows including NULL deadlines", table)
+                    .containsExactlyInAnyOrderElementsOf(rows));
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = ?"
+                        + " AND indexname = 'reservation_due_idx'",
+                    String.class,
+                    schema))
+            .contains("expires_at, id", "RESERVED", "expires_at IS NOT NULL");
 
         for (String status : List.of("RELEASED", "EXPIRED")) {
           assertThat(

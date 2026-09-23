@@ -113,7 +113,9 @@ class IdempotencyLockRaceIT extends PostgresITBase {
             () -> request("reserve", key, reserveBody(account, key, 1)),
             () ->
                 request(
-                    "reserve", key, reserveBody(account, key, 1).replace("}", ",\"ttlSec\":1}")));
+                    "reserve",
+                    key,
+                    reserveBody(account, key, 1).replace("}", ",\"ttlSec\":3600}")));
     assertThat(results.stream().map(r -> r.getResponse().getStatus()))
         .containsExactlyInAnyOrder(201, 422);
     assertOneOperation(key);

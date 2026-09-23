@@ -1,8 +1,8 @@
 package com.g1do.ledger.domain;
 
 /**
- * Reservation states. Release and commit are implemented; expiry execution is reserved for O2-3.
- * Pure Java, Spring-free.
+ * Reservation states with irreversible commit, release, and expiry terminal transitions. Pure Java,
+ * Spring-free.
  */
 public enum ReservationStatus {
   RESERVED,

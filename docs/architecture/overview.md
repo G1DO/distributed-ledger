@@ -18,7 +18,8 @@ Transfer locks both capacities in global order, then subtracts from source `tota
 destination `total`, leaving both accounts' reservation counters unchanged.
 Business, audit, outbox, and the completed stored response commit together. The internal `PENDING` claim never commits
 on its own; an exception or disconnected transaction rolls it back and frees the key for retry.
-Query endpoints read persisted capacity or a stored operation response. See
+Capacity queries first expire due reservations for the addressed account in individual transactions;
+operation lookups only read the immutable stored response. See
 [the operation-claim decision](../decisions/DEC-LEDGER-05-operation-claim.md).
 
 The outbox is storage only: records default to `dispatched=false`, and no relay worker is
@@ -57,7 +58,7 @@ stateDiagram-v2
     [*] --> RESERVED: POST /v1/reserve
     RESERVED --> COMMITTED: POST /v1/commit
     RESERVED --> RELEASED: POST /v1/release
-    RESERVED --> EXPIRED: Planned O2-3 expiry
+    RESERVED --> EXPIRED: Lazy check or scheduled reaper
     COMMITTED --> [*]
     RELEASED --> [*]
     EXPIRED --> [*]
@@ -66,9 +67,24 @@ stateDiagram-v2
 Only one terminal transition may commit. A competing Commit or Release waits on the reservation
 row, then observes the winner's terminal state and returns `409` without another capacity,
 audit, or outbox effect. A same-command replay under the winning key returns the stored body
-before acquiring business locks. `EXPIRED` is accepted by the schema and rejected by Commit
-and Release as terminal, but no expiry path is implemented. `expires_at = NULL` means never
-expires; current Reserve requests still store NULL even when they include `ttlSec`.
+before acquiring business locks. Commit and Release check deadlines after locking the reservation,
+using the PostgreSQL transaction-start timestamp (`now()`). A due reservation causes the user
+transaction to roll back; a separate internal expiry transaction completes before returning `409`.
+This preserves operation-claim-first ordering and prevents the rejected command from rolling
+back expiry or retaining the client's key.
+
+Reserve stores `expires_at = now() + ttlSec` seconds when a TTL is supplied; otherwise NULL means
+never expires. Replays neither renew the deadline nor rewrite the original response. The clock
+is constant throughout each transaction, including time spent waiting for locks.
+
+The single-node reaper runs with fixed delay and a candidate batch cap. Its candidate scan takes
+no reservation locks. For each candidate, an independent `READ COMMITTED` transaction claims an
+internal operation, locks the reservation with `FOR UPDATE SKIP LOCKED`, rechecks deadline/state,
+then locks capacity. Expiry sets `EXPIRED`, releases reserved capacity, inserts one `EXPIRE` audit
+and one outbox event with status `EXPIRED`, and completes its operation atomically. Skips/no-ops
+roll back the claim; failures roll back all effects. A short per-item background lock timeout
+bounds capacity-lock waits. Lazy expiry uses the same transition with a waiting reservation lock.
+See [configuration](../reference/configuration.md) and the [runbook](../operations/runbooks/o2-expiry-reaper.md).
 
 ## Persistent model
 
@@ -84,7 +100,11 @@ The schema is defined by forward-only Flyway migrations.
 extends reservation statuses with `RELEASED` and `EXPIRED` and documents NULL expiration semantics
 without backfilling existing reservations. See [migration rollout ordering](../development/database-migrations.md).
 Transfer reuses the V1/V2 schema: `INT` bounds, nonnegative capacity checks, and the existing
-operation, audit, and outbox tables already support it. No migration is rewritten or added.
+operation, audit, and outbox tables already support it.
+
+[`V3__reservation_expiry.sql`](../../service/src/main/resources/db/migration/V3__reservation_expiry.sql)
+adds a partial due-reservation index and updates the expiration column comment. It does not
+backfill deadlines or change existing reservations; no migration is rewritten.
 
 `capacity.available` is a stored generated value: `total - reserved - committed`. Database check
 constraints prevent negative capacity; row locks serialize the current implementation's capacity

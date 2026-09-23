@@ -15,3 +15,9 @@ spring:
     clean-disabled: true
     user: ${FLYWAY_USER:${POSTGRES_USER:ledger}}
     password: ${FLYWAY_PASSWORD:${POSTGRES_PASSWORD:ledger}}
+ledger:
+  expiry:
+    enabled: ${LEDGER_EXPIRY_ENABLED:true}
+    interval-ms: ${LEDGER_EXPIRY_INTERVAL_MS:1000}
+    batch-size: ${LEDGER_EXPIRY_BATCH_SIZE:100}
+    lock-timeout-ms: ${LEDGER_EXPIRY_LOCK_TIMEOUT_MS:100}

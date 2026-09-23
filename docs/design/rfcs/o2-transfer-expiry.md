@@ -155,16 +155,16 @@ stateDiagram-v2
 | `RESERVED` | `Expire` (TTL reached) | `EXPIRED` | N/A (Internal) | `reserved -= A` (`available += A`) | Insert `EXPIRE` | Insert `EXPIRED` |
 | `COMMITTED` | `Commit` (same key + hash) | `COMMITTED` | `200 OK` | None (Replay response) | None | None |
 | `COMMITTED` | `Commit` (diff key) | `COMMITTED` | `409 Conflict` | None | None | None |
-| `COMMITTED` | `Release` / `Expire` | `COMMITTED` | `409 Conflict` | None | None | None |
+| `COMMITTED` | `Release` / `Expire` | `COMMITTED` | `409 Conflict` / Internal no-op | None | None | None |
 | `RELEASED` | `Release` (same key + hash) | `RELEASED` | `200 OK` | None (Replay response) | None | None |
 | `RELEASED` | `Release` (diff key) | `RELEASED` | `409 Conflict` | None | None | None |
-| `RELEASED` | `Commit` / `Expire` | `RELEASED` | `409 Conflict` | None | None | None |
+| `RELEASED` | `Commit` / `Expire` | `RELEASED` | `409 Conflict` / Internal no-op | None | None | None |
 | `EXPIRED` | `Commit` / `Release` | `EXPIRED` | `409 Conflict` | None | None | None |
 | Any | Any (same key, diff hash) | Unchanged | `422 Unprocessable` | None | None | None |
 
 ### 4.2 Terminal Race Rules:
-- **Winner Determination**: The first transaction to acquire `SELECT ... FROM reservation WHERE id = :id FOR UPDATE` observes `status = 'RESERVED'`. It mutates the state, applies capacity adjustments, writes audit/outbox entries, and commits.
-- **Loser Behavior**: Any concurrent competitor waiting on that row lock wakes up after commit, re-reads the row in `READ COMMITTED`, observes the terminal status (`COMMITTED`, `RELEASED`, or `EXPIRED`), and immediately aborts with `409 Conflict` without modifying capacity or creating audit rows.
+- **Winner Determination**: A transaction holding the reservation lock must observe `RESERVED` and satisfy its deadline check before applying a terminal transition, capacity adjustments, and audit/outbox entries. Commit/Release evaluate the deadline against their transaction-start timestamp; Expire requires the deadline to be due in its own transaction.
+- **Loser Behavior**: A competing Commit/Release rereads the terminal state after acquiring the lock and returns `409` without modifying capacity or creating audit rows. A background Expire skips locked reservations and rolls back its internal claim when the candidate is no longer due or active.
 
 ---
 
@@ -172,28 +172,26 @@ stateDiagram-v2
 
 ### 5.1 Authoritative Clock Selection
 - **Decision**: PostgreSQL transaction timestamp (`now()` / `transaction_timestamp()`) is the sole authoritative clock for expiration.
-- **Rationale**: Application host clocks drift across multi-instance deployments and container environments. Relying on PostgreSQL guarantees strict monotonicity within transactions and eliminates clock-skew race anomalies.
+- **Rationale**: Application host clocks drift across multi-instance deployments and container environments. PostgreSQL supplies one timestamp fixed at transaction start, including time spent waiting for locks. It does not advance within that transaction.
+- **Deadline storage**: A new Reserve stores `now() + ttlSec` seconds when a TTL is supplied; a replay leaves the original deadline unchanged.
 
 ### 5.2 Expiry Evaluation Paths
 1. **Lazy Expiry on Access**:
-   - Whenever an operation (`Commit`, `Release`, or `Query`) accesses a reservation with `expires_at IS NOT NULL`:
-   - If `expires_at <= now()`, the reservation is treated as expired. An attempt to commit or release transitions the reservation to `EXPIRED`, returns capacity to `available`, logs an audit entry, and responds with `409 Conflict (Reservation expired)`.
+   - Commit and Release resolve replay/mismatch first, then lock and check the reservation. A due `RESERVED` row causes the command transaction to roll back its claim. An independent expiry transaction claims its own operation, locks and rechecks the row, and commits expiry before the command returns `409 Conflict`. A concurrent terminal winner remains unchanged.
+   - Account capacity queries expire due reservations for that account individually before reading counters. Operation-response lookup does not trigger expiry. Stored responses are never rewritten.
 2. **Scheduled Expiry Reaper**:
-   - Background worker running periodically with bounded batch queries:
+   - A single-node fixed-delay worker discovers a bounded candidate batch without taking row locks:
      ```sql
      SELECT id FROM reservation 
      WHERE status = 'RESERVED' 
        AND expires_at IS NOT NULL 
        AND expires_at <= now()
-     ORDER BY expires_at ASC
-     LIMIT :batchSize
-     FOR UPDATE SKIP LOCKED;
+     ORDER BY expires_at ASC, id ASC
+     LIMIT :batchSize;
      ```
-   - For each locked reservation:
-     - Transition `status = 'EXPIRED'`.
-     - Update capacity: `reserved -= amount`.
-     - Insert `audit_entry(kind='EXPIRE')` and `outbox(aggregate='RESERVATION', status='EXPIRED')`.
-   - `SKIP LOCKED` ensures concurrent worker sweeps or active user transactions do not block each other.
+   - Each candidate uses a separate short transaction: claim an internal operation, then acquire the reservation with `FOR UPDATE SKIP LOCKED` and recheck its state/deadline, then lock capacity.
+   - A due `RESERVED` row transitions to `EXPIRED`, decrements `reserved`, and inserts exactly one `audit_entry(kind='EXPIRE')` and `outbox(aggregate='reservation')` with payload status `EXPIRED`. The completed internal operation commits in the same transaction.
+   - Skipped or stale candidates roll back their operation claim. `SKIP LOCKED` avoids waiting on active reservation locks; a per-item background `lock_timeout` bounds waits on capacity. Repeated sweeps cannot create a second terminal effect. Lazy expiry uses a waiting reservation lock.
 
 ### 5.3 Semantics of `NULL expires_at`
 - **Rule**: `expires_at IS NULL` signifies **Never Expires**.

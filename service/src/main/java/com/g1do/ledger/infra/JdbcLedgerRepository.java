@@ -78,10 +78,16 @@ public class JdbcLedgerRepository {
   }
 
   public Optional<Map<String, Object>> lockReservation(UUID reservationId) {
+    return lockReservation(reservationId, false);
+  }
+
+  public Optional<Map<String, Object>> lockReservation(UUID reservationId, boolean skipLocked) {
     List<Map<String, Object>> rows =
         jdbc.queryForList(
-            "SELECT id, account_id, operation_id, amount, status"
-                + " FROM reservation WHERE id = ? FOR UPDATE",
+            "SELECT id, account_id, operation_id, amount, status,"
+                + " COALESCE(expires_at <= now(), false) AS due"
+                + " FROM reservation WHERE id = ? FOR UPDATE"
+                + (skipLocked ? " SKIP LOCKED" : ""),
             reservationId);
     if (rows.isEmpty()) {
       return Optional.empty();
@@ -95,15 +101,38 @@ public class JdbcLedgerRepository {
   }
 
   public void insertReservation(
-      UUID id, UUID accountId, UUID operationId, int amount, String status) {
+      UUID id, UUID accountId, UUID operationId, int amount, String status, Integer ttlSec) {
     jdbc.update(
-        "INSERT INTO reservation (id, account_id, operation_id, amount, status)"
-            + " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO reservation (id, account_id, operation_id, amount, status, expires_at)"
+            + " VALUES (?, ?, ?, ?, ?, now() + ? * INTERVAL '1 second')",
         id,
         accountId,
         operationId,
         amount,
-        status);
+        status,
+        ttlSec);
+  }
+
+  /** Candidate discovery takes no row locks; each expiry claims its operation first. */
+  public List<UUID> findDueReservations(int batchSize) {
+    return jdbc.queryForList(
+        "SELECT id FROM reservation WHERE status = 'RESERVED' AND expires_at <= now()"
+            + " ORDER BY expires_at, id LIMIT ?",
+        UUID.class,
+        batchSize);
+  }
+
+  public List<UUID> findDueReservationsForAccount(UUID accountId) {
+    return jdbc.queryForList(
+        "SELECT id FROM reservation WHERE account_id = ?"
+            + " AND status = 'RESERVED' AND expires_at <= now() ORDER BY expires_at, id",
+        UUID.class,
+        accountId);
+  }
+
+  public void setLocalLockTimeout(int milliseconds) {
+    jdbc.queryForObject(
+        "SELECT set_config('lock_timeout', ?, true)", String.class, milliseconds + "ms");
   }
 
   public void updateReservationStatus(UUID reservationId, String status) {
