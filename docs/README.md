@@ -3,6 +3,8 @@
 - [Architecture overview](architecture/overview.md) — implemented service, database, and data flow.
 - [API](api/overview.md) — HTTP contract and idempotency behavior.
 - [Ledger invariants](design/specifications/ledger-invariants.md) — capacity, atomicity, audit, and idempotency guarantees.
+- [Sequential KV contract](design/specifications/kv/README.md) — GET/PUT/DELETE/CAS semantics and the canonical TLA+ model.
+- [KV verification](development/kv-verification.md) — Rust/Python conformance, bounded TLC checks, specification synchronization, and evidence.
 - [Development and testing](development/testing.md) — build, test, and integration-test workflow.
 - [Database migrations](development/database-migrations.md) — Flyway and PostgreSQL constraints.
 - [Configuration](reference/configuration.md) — runtime variables and local Compose defaults.
