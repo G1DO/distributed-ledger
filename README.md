@@ -111,6 +111,12 @@ java -version  # 25.x LTS
 
 `service/` `engines/` `control-plane/` (no implemented API) `simulation/` (no implemented harness) `docs/`.
 
+`reference/kv/` contains the separate deterministic Rust GET/PUT/DELETE/CAS reference.
+Its [contract and TLA+ model](docs/design/specifications/kv/README.md) are checked against an
+independent Python checker; run `python3 scripts/verify-kv.py` from the repository root.
+See [KV verification](docs/development/kv-verification.md) for the pinned tools, 10,000-operation
+replay, required merge gate, and bounded verification claims.
+
 ## Documentation
 
 The durable technical documentation is indexed in [docs/README.md](docs/README.md): the API

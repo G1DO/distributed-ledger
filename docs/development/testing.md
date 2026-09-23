@@ -36,6 +36,9 @@ and kills/restarts only those processes and its own container, never the Compose
 Its PostgreSQL recovery log and application logs are saved under `target/process-crash/`.
 
 CI runs the full command, documentation taxonomy check, and O2 Compose drill on JDK 25.
+The same required job also enforces corresponding specification updates and runs the separate
+[sequential KV verification](kv-verification.md): bounded TLC checks, deterministic Rust tests,
+and two independently checked 10,000-operation replays.
 It also has an allowed-failure JDK 26 compatibility lane and an
 informational OSV scan. The Docker image build skips integration tests (`-DskipITs`) because it
 does not run Docker-in-Docker; use the wrapper command above for the full gate. CI retains

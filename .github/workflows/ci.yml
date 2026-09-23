@@ -10,11 +10,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
           cache: maven
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require corresponding specification changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check-spec-sync.py --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Install pinned reference toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy
+      - name: Verify sequential KV specification and reference
+        run: python3 scripts/verify-kv.py
       - name: Verify (strict)
         working-directory: service
         run: ./mvnw -B verify -Pstrict
@@ -42,6 +57,7 @@ jobs:
             service/target/failsafe-reports/
             service/target/process-crash/
             service/target/o2-*/
+            target/kv/
           retention-days: 30
 
   build-jdk26:
