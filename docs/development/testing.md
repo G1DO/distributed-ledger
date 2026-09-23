@@ -35,10 +35,11 @@ and `full_page_writes` explicitly enabled. It starts the packaged application JA
 and kills/restarts only those processes and its own container, never the Compose database.
 Its PostgreSQL recovery log and application logs are saved under `target/process-crash/`.
 
-CI runs the full command on JDK 25. It also has an allowed-failure JDK 26 compatibility lane and an
+CI runs the full command, documentation taxonomy check, and O2 Compose drill on JDK 25.
+It also has an allowed-failure JDK 26 compatibility lane and an
 informational OSV scan. The Docker image build skips integration tests (`-DskipITs`) because it
 does not run Docker-in-Docker; use the wrapper command above for the full gate. CI retains
-Surefire/Failsafe XML and process logs for 30 days; copy release evidence to durable storage
+Surefire/Failsafe XML, process logs, and O2 CSV/seed/repro/Compose evidence for 30 days; copy release evidence to durable storage
 before those artifacts expire. A green compatibility/security advisory lane is not a required
 security release gate yet (O3).
 
@@ -59,8 +60,8 @@ itself; CI success and an approved architectural review are different evidence.
 - `KillMidTxIT` covers injected exceptions and connection loss; `ProcessCrashIT` adds actual
   application and database process failure. See the [failure matrix](../operations/runbooks/o1-crash-matrix.md).
 
-These are bounded O1 tests, not the planned 1,000 concurrent/shrinkable O2 histories, tenant
-isolation, PITR, host-power-loss durability, or a production-readiness certificate. Tests requiring
+These O1 checks remain alongside the O2 system gate below. Neither establishes tenant
+isolation, PITR, host-power-loss durability, or production readiness. Tests requiring
 a packaged JAR must run via `verify`, not just `test` or `failsafe:integration-test` directly.
 
 ## Release verification scope
@@ -121,3 +122,55 @@ after expiry, and a rejected due Commit/Release must leave no client operation c
 These are bounded PostgreSQL integration checks. They do not establish distributed scheduler
 coordination or external delivery of expiry events. Run the full `clean verify -Pstrict` gate
 for interactions with the existing slices.
+
+## O2 system gate and reproducible histories
+
+`O2ContentionIT` releases 100 callers from a common barrier into the HTTP handler and PG16
+transactions, using distinct keys for one-unit reserves against 50 available. Exactly 50 `201`
+and 50 `409` responses are required; any unexpected response or unfinished worker fails the
+gate. `target/o2-contention/<seed>/` keeps raw CSV (including response bytes/errors), environment,
+repro command, and final counters. No transport failures are injected in this gate.
+
+`O2GeneratedHistoryIT` runs 1,000 histories by default, starting at seed `4210421`. Each history
+has two fresh 100-unit accounts, 13 batches of one to three concurrent calls, terminal and
+transfer concurrent batches, expiry, replay/mismatch and unknown outcomes, plus seeded random mixtures.
+It invokes the real transactional services against PG16. An independent state machine explores
+all serial orders within a batch and requires one order to explain both responses and persisted
+capacity/reservation state. `InvariantChecker` separately reconciles reservation and audit sums,
+transfer deltas from known initial totals, and one audit/outbox per completed O2 effect.
+`O2InvariantCheckerIT` supplies corruption controls; `GeneratedHistoryTest` exercises the model,
+reproducer round-trip and shrinker.
+
+A client timeout is unknown, never a business rejection: lookup followed by identical-key replay
+must settle it before boundary checks. A missing lookup alone cannot prove rollback. Deliberate
+unknowns cover loss before dispatch (absent lookup) and after completion (stored lookup); these
+are controlled test-driver scenarios, not physical network faults.
+Workers must finish before fixture cleanup. Expiry fixtures set selected deadlines due using
+PostgreSQL time; the real-time TTL/scheduler path is separately covered by Compose.
+The history context sets a test-only 20-second PostgreSQL statement timeout. Unresolved worker
+or recovery failures fail the history; an internal Expire timeout waits for its original worker
+because there is no client key to replay. Dedicated race tests force database lock waits;
+the generated batches use a common caller start barrier.
+
+`target/o2-histories/seeds.csv` retains each seed, command/batch count, result and elapsed time.
+Failures preserve the symbolic input and observed trace before attempting bounded deletion
+shrinking. Only candidates reproducing the same failure are retained. The reduced history/trace
+reports the attempt count and `deletionMinimal` flag: false means the budget ran out; even true
+only describes batch/command/deadline deletion under the observed schedules, not a globally
+smallest counterexample. Seeded inputs do not guarantee the same thread schedule on another run.
+
+From `service/`:
+
+```bash
+# Full 1,000-history corpus plus exact contention and existing fault/race gates.
+./mvnw -Pstrict -Dit.test=O2ContentionIT,O2GeneratedHistoryIT,O2InvariantCheckerIT,TransferAtomicityIT,CommitReleaseRaceIT,ExpiryReaperIT verify
+# Focused reproduction; a reduced count is not the 1,000-history exit gate.
+./mvnw -Pstrict -Dit.test=O2GeneratedHistoryIT -Dledger.history.seed=4210421 -Dledger.history.count=1 verify
+./mvnw -Pstrict -Dit.test=O2GeneratedHistoryIT -Dledger.history.repro=target/o2-histories/failure-4210421-minimal.history verify
+```
+
+Archive failure files before `clean`, which removes `target/`. Copy an exact recorded repro file
+outside `target/` to retain it across clean builds. The
+[configuration reference](../reference/configuration.md#verification-controls) lists harness overrides;
+the [system runbook](../operations/runbooks/o2-system-verification.md) adds real Compose recovery,
+documentation taxonomy, artifact retention, and the merged-main/Notion outcome gate.

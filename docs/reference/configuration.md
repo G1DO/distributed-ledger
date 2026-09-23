@@ -37,3 +37,20 @@ Run the scheduler on one application node only; there is no distributed schedule
 Set `LEDGER_EXPIRY_ENABLED=false` and restart to stop background sweeps. Lazy expiry on capacity
 queries, Commit, and Release remains active. See the [expiry runbook](../operations/runbooks/o2-expiry-reaper.md)
 for rollout, recovery, and rollback.
+
+## Verification controls
+
+These are test JVM properties, passed to Maven with `-D`; they do not change runtime behavior.
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `ledger.contention.seed` | `160421` | Reproduce capacity-edge account, keys and caller submission order |
+| `ledger.history.seed` | `4210421` | First generated-history seed; subsequent histories increment it |
+| `ledger.history.count` | `1000` | Corpus size; smaller values are debugging runs, not the O2 exit gate |
+| `ledger.history.repro` | unset | Replay a saved symbolic `.history` file instead of generating a corpus |
+| `ledger.history.shrinkBudget` | `100` | Nonnegative maximum same-failure replay attempts for deletion shrinking |
+
+The Compose verification driver needs Python 3 and curl and uses a fresh project with Docker-assigned
+loopback ports. It ignores local Compose project/port overrides and writes evidence under
+`service/target/o2-compose-e2e/`. See [testing](../development/testing.md) and the
+[system verification runbook](../operations/runbooks/o2-system-verification.md).

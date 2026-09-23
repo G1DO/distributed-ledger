@@ -36,6 +36,13 @@ that starts from known totals and tracks each accepted command independently. Th
 `available` equation alone cannot detect a double debit. Negative controls deliberately inject
 counter drift, an absent audit effect, and an unexplained total change and must fail the checker.
 
+The O2 checker reconciles `reserved = SUM(RESERVE) - SUM(COMMIT) - SUM(RELEASE) - SUM(EXPIRE)`
+and `committed = SUM(COMMIT)` with reservation rows and counters. For each account it also
+reconciles initial total plus incoming minus outgoing transfer audit effects. The generated
+history model independently predicts accepted/rejected commands and final state across each
+concurrent batch; the [system gate](../../operations/runbooks/o2-system-verification.md) retains
+its seeds and failure repros alongside the exact capacity-edge CSV.
+
 ## I3 — Audit append-only
 
 Each first successful reserve, commit, release, expire, or transfer effect inserts exactly one `audit_entry` with before/after
