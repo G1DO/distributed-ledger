@@ -1,9 +1,9 @@
 # Distributed Ledger
 
 Java 25 / Spring Boot 4.1 / PostgreSQL 16 capacity-reservation engine. The implemented slice is
-`Reserve → Commit → Query`, with transactional idempotency, audit, and outbox storage.
-O1 verification is in progress; Release, Transfer, expiry, authorization, relay, and PITR are
-planned, not implemented. This unauthenticated development service is not production-ready.
+`Reserve → Commit or Release → Query`, with transactional idempotency, audit, and outbox storage.
+Transfer, expiry, authorization, relay, and PITR are planned, not implemented. This unauthenticated
+development service is not production-ready.
 
 ## 5-min replay
 

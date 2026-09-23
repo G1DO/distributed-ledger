@@ -9,31 +9,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Commit slice: {@code RESERVED -> COMMITTED} atomically. Second commit under the same key returns
- * the original body with no second audit row and no double decrement.
- */
+/** Release reserved capacity with one atomic operation, audit, and outbox effect. */
 @Service
-public class CommitService {
+public class ReleaseService {
 
   private final JdbcLedgerRepository repository;
   private final OperationCoordinator operations;
 
-  public CommitService(JdbcLedgerRepository repository, OperationCoordinator operations) {
+  public ReleaseService(JdbcLedgerRepository repository, OperationCoordinator operations) {
     this.repository = repository;
     this.operations = operations;
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
-  public OperationResult commit(
+  public OperationResult release(
       String reservationIdValue, String idempotencyKey, String headerKey) {
     SliceSupport.requireHeaderMatchesBody(headerKey, idempotencyKey);
     UUID reservationId = SliceSupport.requireUuidV4(reservationIdValue, "reservationId");
+    String requestHash =
+        RequestHash.sha256Hex(RequestHash.canonicalRelease(reservationIdValue, idempotencyKey));
 
-    String canonical = RequestHash.canonicalCommit(reservationIdValue, idempotencyKey);
-    String requestHash = RequestHash.sha256Hex(canonical);
-
-    OperationClaim claim = operations.claim("COMMIT", idempotencyKey, requestHash);
+    OperationClaim claim = operations.claim("RELEASE", idempotencyKey, requestHash);
     if (claim.replayed()) {
       return claim.replay();
     }
@@ -43,15 +39,12 @@ public class CommitService {
             .lockReservation(reservationId)
             .orElseThrow(
                 () -> new LedgerNotFoundException("reservation not found: " + reservationIdValue));
+    ReservationStatus current = ReservationStatus.parse((String) reservation.get("status"));
+    if (!current.canTransitionTo(ReservationStatus.RELEASED)) {
+      throw new LedgerConflictException("Reservation already terminal: " + reservationIdValue);
+    }
     UUID accountId = (UUID) reservation.get("account_id");
     int amount = ((Number) reservation.get("amount")).intValue();
-    String statusValue = (String) reservation.get("status");
-    ReservationStatus current = ReservationStatus.parse(statusValue);
-    if (!current.canTransitionTo(ReservationStatus.COMMITTED)) {
-      String reason = current == ReservationStatus.COMMITTED ? "committed" : "terminal";
-      throw new LedgerConflictException(
-          "Reservation already " + reason + ": " + reservationIdValue);
-    }
 
     Map<String, Object> capacity =
         repository
@@ -63,8 +56,6 @@ public class CommitService {
     int available = ((Number) capacity.get("available")).intValue();
 
     UUID operationId = claim.operationId();
-    UUID outboxId = UUID.randomUUID();
-
     String responseBody =
         "{\"accountId\":\""
             + accountId
@@ -74,15 +65,15 @@ public class CommitService {
             + RequestHash.escape(idempotencyKey)
             + "\",\"reservationId\":\""
             + reservationIdValue
-            + "\",\"status\":\"COMMITTED\"}";
+            + "\",\"status\":\"RELEASED\"}";
 
-    repository.updateReservationStatus(reservationId, "COMMITTED");
-    repository.moveReservedToCommitted(accountId, amount);
+    repository.updateReservationStatus(reservationId, "RELEASED");
+    repository.releaseReserved(accountId, amount);
 
     String beforeJson = ReserveService.snapshotJson(total, reserved, committed, available);
     String afterJson =
-        ReserveService.snapshotJson(total, reserved - amount, committed + amount, available);
-    repository.insertAudit(operationId, accountId, "COMMIT", amount, beforeJson, afterJson);
+        ReserveService.snapshotJson(total, reserved - amount, committed, available + amount);
+    repository.insertAudit(operationId, accountId, "RELEASE", amount, beforeJson, afterJson);
 
     String outboxPayload =
         "{\"accountId\":\""
@@ -94,7 +85,7 @@ public class CommitService {
             + "\",\"reservationId\":\""
             + reservationIdValue
             + "\"}";
-    repository.insertOutbox(outboxId, "commit", outboxPayload);
+    repository.insertOutbox(UUID.randomUUID(), "release", outboxPayload);
 
     return new OperationResult(operations.complete(operationId, responseBody), false);
   }

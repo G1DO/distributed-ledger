@@ -37,6 +37,11 @@ public final class RequestHash {
         + "\"}";
   }
 
+  /** Release has the same canonical body as commit; the operation claim also checks its type. */
+  public static String canonicalRelease(String reservationId, String idempotencyKey) {
+    return canonicalCommit(reservationId, idempotencyKey);
+  }
+
   public static String sha256Hex(String canonical) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -6,6 +6,9 @@ and [DEC-LEDGER-04](../../decisions/DEC-LEDGER-04-concurrency.md) for the accept
 concurrency decisions.
 
 Conventions: each invariant is falsifiable — it states a check that can fail.
+Reserve, Commit, and Release are implemented. Transfer and expiry effects below describe the
+accepted O2 design and remain planned. `EXPIRED` is a recognized terminal state reserved for
+O2-3; no current API or worker performs expiry.
 
 ## I1 — Nonnegative capacity
 
@@ -18,10 +21,14 @@ Falsifier: any row with `available < 0` or `total < 0`, an overdrawn reserve/tra
 
 - Reserve moves `available -> reserved`.
 - Commit moves `reserved -> committed` with `SUM(reserved+committed)` stable across commit.
-- Release and Expire move `reserved -> available` (`committed` and `total` unchanged).
+- Release moves `reserved -> available` by the reservation amount (`committed` and `total`
+  unchanged); Expire has the same planned capacity effect.
 - Transfer moves $\text{total}_S \to \text{total}_D$ with $\Delta \text{total}_S + \Delta \text{total}_D = 0$.
 Across all operations, units are neither arbitrarily created nor destroyed. System-wide $\sum \text{total}$ is constant across transfers.
-Falsifier: `SUM` drift after commit/release/expire, unexplained `total` change, or aggregate ledger drift across transfer.
+For Reserve, Commit, and Release, `available + reserved + committed = total` remains constant;
+`reserved + committed` decreases on Release by exactly the reservation amount.
+Falsifier: an incorrect counter delta after commit/release/expire, unexplained `total` change,
+or aggregate ledger drift across transfer.
 Evidence compares counters with reservation records and audit effects, plus a test-side model
 that starts from known totals and tracks each accepted command independently. The generated
 `available` equation alone cannot detect a double debit. Negative controls deliberately inject
@@ -42,7 +49,11 @@ same key+different hash fails `422`. Concurrent same-key writers converge to one
 by claiming identity before business locks (`ON CONFLICT DO NOTHING`, then a fresh
 `READ COMMITTED` read of the winner). The operation type must also match. Failed attempts
 roll back their claims; only completed effects retain their keys.
-Terminal states (`COMMITTED`, `RELEASED`, `EXPIRED`) are immutable: once reached, concurrent or subsequent competing terminal requests fail `409 Conflict`.
+Terminal states (`COMMITTED`, `RELEASED`, `EXPIRED`) are immutable: once reached, concurrent or
+subsequent competing terminal requests under a new key fail `409 Conflict`. Replay is resolved
+before inspecting reservation state, so a successful same-command replay still returns its
+original response. Commit and Release serialize on the reservation row before locking capacity;
+exactly one can make the terminal transition, with one audit effect and one outbox row.
 Falsifier: two operations sharing one key, a replay creating a second reservation/audit row,
 replay returning different bytes, or a reservation transitioning out of a terminal state.
 
@@ -67,12 +78,12 @@ One account's reserve/commit/release never changes another account's `capacity`,
 the API currently has no caller authentication or authorization.
 Falsifier: cross-account capacity change outside transfer, or a query returning another account's state.
 
-## I7 — Expiry deadline enforcement (O2 specification)
+## I7 — Expiry deadline enforcement (planned, O2-3)
 
 A reservation with `expires_at IS NOT NULL` where `expires_at <= now()` cannot be committed or released. Any uncommitted expired reservation transitions to `EXPIRED` (via lazy evaluation on access or background scheduled reaper sweep) and frees its reserved capacity (`reserved -= amount`, `available += amount`). `expires_at IS NULL` signifies "never expires".
 Falsifier: a reservation committing when `expires_at <= now()`, or an expired reservation leaving capacity locked.
 
 ## Planned / Not implemented
 
-HTTP authentication and authorization (O3), observability dashboards and alerts (O4), outbox relay worker to external queues, replication, control-plane APIs, live migration, and privacy controls are not implemented and must not be assumed by callers.
+Transfer (O2-2), expiry deadline storage/evaluation and the reaper (O2-3), HTTP authentication and authorization (O3), observability dashboards and alerts (O4), outbox relay worker to external queues, replication, control-plane APIs, live migration, and privacy controls are not implemented and must not be assumed by callers.
 See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md) for O2 design specifications.
