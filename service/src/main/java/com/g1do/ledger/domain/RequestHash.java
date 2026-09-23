@@ -42,6 +42,20 @@ public final class RequestHash {
     return canonicalCommit(reservationId, idempotencyKey);
   }
 
+  /** Canonical form for transfer: direction matters and keys are sorted alphabetically. */
+  public static String canonicalTransfer(
+      String fromAccountId, String toAccountId, int amount, String idempotencyKey) {
+    return "{\"amount\":"
+        + amount
+        + ",\"fromAccountId\":\""
+        + escape(fromAccountId)
+        + "\",\"idempotencyKey\":\""
+        + escape(idempotencyKey)
+        + "\",\"toAccountId\":\""
+        + escape(toAccountId)
+        + "\"}";
+  }
+
   public static String sha256Hex(String canonical) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");

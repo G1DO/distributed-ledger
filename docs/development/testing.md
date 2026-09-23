@@ -24,7 +24,7 @@ JDK 26 is a deliberately opt-in compatibility experiment:
 Ordinary application and health tests use the H2 test configuration. Database integration tests
 use a shared Testcontainers PostgreSQL 16 container and verify schema constraints, audit
 permissions, idempotency (including concurrent writers), transactional rollback, the outbox, and
-the Reserve, Commit, and Release slices. Docker must be available for those integration tests.
+the Reserve, Commit, Release, and Transfer slices. Docker must be available for those integration tests.
 
 `ProcessCrashIT` uses a separate disposable PG16 container with `fsync`, `synchronous_commit`,
 and `full_page_writes` explicitly enabled. It starts the packaged application JAR in child JVMs
@@ -75,3 +75,22 @@ Run the focused integration tests from `service/` on JDK 25 with Docker availabl
 ```
 
 Use the full `clean verify -Pstrict` command above for the repository gate.
+
+## Transfer verification scope
+
+`TransferAtomicityIT` checks accounting with existing reservations, integer limits and overflow,
+same-account rejection, missing accounts, byte-identical replay/lookup, and one audit/outbox
+effect per committed transfer. It forces a lower-UUID lock wait while checking that the higher
+UUID remains lockable, then exercises opposite-direction transfers and checks `SUM(total)`
+conservation. UUID fixtures span Java's signed comparison boundary to detect a different lock order.
+Connection termination after the real source debit and after the outbox insert checks full
+rollback and same-key recovery, including the absence of orphan outbox rows. Test output records
+byte-identical first/replay/lookup evidence and the actual before/after `SUM(total)` query results.
+
+```bash
+./mvnw -Dit.test=TransferAtomicityIT verify -Pstrict
+```
+
+These are bounded PostgreSQL 16 concurrency and database-session failure tests. They do not add
+expiry, tenant isolation, or host-power-loss durability coverage. The full repository gate also
+runs the existing reservation, release, and process-crash tests.

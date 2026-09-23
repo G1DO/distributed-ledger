@@ -8,7 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * JDBC access for the O1 slice. All statements use bound parameters. Callers own transaction
+ * JDBC access for ledger commands. All statements use bound parameters. Callers own transaction
  * boundaries; every write method is intended to run inside a single {@code @Transactional} slice
  * (business row + outbox + audit same local tx).
  */
@@ -43,6 +43,15 @@ public class JdbcLedgerRepository {
       return Optional.empty();
     }
     return Optional.of(rows.get(0));
+  }
+
+  /** PostgreSQL UUID order is global and independent of the transfer direction. */
+  public List<Map<String, Object>> lockCapacities(UUID fromAccountId, UUID toAccountId) {
+    return jdbc.queryForList(
+        "SELECT account_id, total, reserved, committed, available, version"
+            + " FROM capacity WHERE account_id IN (?, ?) ORDER BY account_id ASC FOR UPDATE",
+        fromAccountId,
+        toAccountId);
   }
 
   public boolean claimOperation(UUID id, String key, String type, String requestHash) {
@@ -120,6 +129,13 @@ public class JdbcLedgerRepository {
   public void releaseReserved(UUID accountId, int amount) {
     jdbc.update(
         "UPDATE capacity SET reserved = reserved - ?, version = version + 1 WHERE account_id = ?",
+        amount,
+        accountId);
+  }
+
+  public void addTotal(UUID accountId, int amount) {
+    jdbc.update(
+        "UPDATE capacity SET total = total + ?, version = version + 1 WHERE account_id = ?",
         amount,
         accountId);
   }

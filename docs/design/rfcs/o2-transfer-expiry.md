@@ -48,7 +48,7 @@ $$\text{reserved}_S, \text{committed}_S, \text{reserved}_D, \text{committed}_D \
 1. **Capacity Nonnegativity**: $\text{available}_S \ge 0$, $\text{available}_D \ge 0$, $\text{total}_S \ge 0$, $\text{total}_D \ge 0$.
 2. **Global Conservation**: $\Delta \text{total}_S + \Delta \text{total}_D = (-A) + (+A) = 0$.
    Across all accounts in the system, $\sum_{i} \text{total}_i$ is strictly conserved.
-3. **Atomicity**: The source debit and destination credit occur in the exact same database transaction alongside the operation claim, audit entry (`kind='TRANSFER'`), and outbox entry (`aggregate='TRANSFER'`). No intermediate or half-transferred state is ever visible or committed.
+3. **Atomicity**: The source debit and destination credit occur in the exact same database transaction alongside the operation claim, audit entry (`kind='TRANSFER'`), and outbox entry (`aggregate='transfer'`, following the implemented lowercase aggregate convention). No intermediate or half-transferred state is ever visible or committed.
 
 ---
 
@@ -206,7 +206,7 @@ stateDiagram-v2
 1. **Storage Types**:
    - All monetary/capacity quantities are 32-bit signed integers (`INT` / `INTEGER`), bounded by $0 \le \text{amount} \le \text{INT\_MAX} = 2,147,483,647$.
 2. **Double-Guard Invariant Protection**:
-   - Application-layer checks (`if (total + amount > Integer.MAX_VALUE) throw new ValidationException(...)`).
+   - Application-layer checks (`total > Integer.MAX_VALUE - amount`, rejecting overflow with HTTP `400` before either write).
    - Database constraint checks (`CHECK (total >= 0)`, `CHECK (reserved >= 0)`, `CHECK (committed >= 0)`, `CHECK (available >= 0)`).
 3. **Identifier Constraints**:
    - All IDs (`accountId`, `reservationId`, `operationId`) are UUIDv4 strings.

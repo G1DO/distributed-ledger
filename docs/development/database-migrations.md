@@ -30,3 +30,16 @@ Rollback requires a new forward compensating migration and a compatible applicat
 Never edit V1/V2, undo Flyway history, or restart the old application against the expanded schema.
 If new terminal states have been persisted, compensation must preserve their accounting and
 audit history; do not relabel them as active reservations to restore the old check.
+
+## Transfer rollout
+
+Transfer reuses the O2-1 migration line through V2. No additional schema change is needed:
+capacity totals already use `INT` plus nonnegative `CHECK`s, operation/audit kinds are text,
+and audit snapshots and outbox payloads are JSONB. Apply all existing migrations before serving
+the Transfer-capable application; preserve the V2 application ordering above when upgrading
+from V1. Do not edit an applied migration or add a second O2 terminal-state migration.
+
+To withdraw the endpoint, deploy the preceding Release-capable application, retaining V2 and
+all committed transfer, audit, and outbox history. Reverting application code does not undo
+transferred balances. If a later rollback requires schema or data compensation, use a new
+forward migration that preserves accounting and audit history, never a rewritten V1/V2.

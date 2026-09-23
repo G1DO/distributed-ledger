@@ -6,7 +6,7 @@ and [DEC-LEDGER-04](../../decisions/DEC-LEDGER-04-concurrency.md) for the accept
 concurrency decisions.
 
 Conventions: each invariant is falsifiable — it states a check that can fail.
-Reserve, Commit, and Release are implemented. Transfer and expiry effects below describe the
+Reserve, Commit, Release, and Transfer are implemented. Expiry effects below describe the
 accepted O2 design and remain planned. `EXPIRED` is a recognized terminal state reserved for
 O2-3; no current API or worker performs expiry.
 
@@ -15,6 +15,8 @@ O2-3; no current API or worker performs expiry.
 `capacity.available = total - reserved - committed` is always `>= 0`, and `0 <= total <= INT_MAX`.
 Enforced by app check + `CHECK(capacity_available_nonnegative)` + `CHECK(total >= 0)` + `SELECT ... FOR UPDATE`.
 Transfer enforces source $\text{available}_S \ge A$ and destination $\text{total}_D + A \le \text{INT\_MAX}$.
+The overflow check uses `total_D > INT_MAX - A` and returns `400` before either capacity write;
+source insufficiency returns `409`. Transfer amounts must be JSON integers in `1..INT_MAX`.
 Falsifier: any row with `available < 0` or `total < 0`, an overdrawn reserve/transfer, or an integer overflow.
 
 ## I2 — Conservation
@@ -24,6 +26,8 @@ Falsifier: any row with `available < 0` or `total < 0`, an overdrawn reserve/tra
 - Release moves `reserved -> available` by the reservation amount (`committed` and `total`
   unchanged); Expire has the same planned capacity effect.
 - Transfer moves $\text{total}_S \to \text{total}_D$ with $\Delta \text{total}_S + \Delta \text{total}_D = 0$.
+  Each account's `reserved` and `committed` remain unchanged; its `available` changes with `total`.
+  Same-account transfers fail `400` before claiming identity or acquiring business locks.
 Across all operations, units are neither arbitrarily created nor destroyed. System-wide $\sum \text{total}$ is constant across transfers.
 For Reserve, Commit, and Release, `available + reserved + committed = total` remains constant;
 `reserved + committed` decreases on Release by exactly the reservation amount.
@@ -40,6 +44,8 @@ Each first successful reserve, commit, release, expire, or transfer effect inser
 snapshots; an idempotent replay creates none. The application database role cannot update or delete audit rows
 (`REVOKE UPDATE, DELETE ON audit_entry FROM app_role`, SQLState `42501` on violation).
 Falsifier: mutated/deleted audit row, or a committed operation without exactly one audit row.
+Transfer uses one audit row anchored to the source account, with both account IDs and counters
+under `from` and `to` in each snapshot, plus one outbox row. Replays insert neither.
 
 ## I4 — Stable identity + at-most-once effect
 
@@ -63,6 +69,11 @@ A response that creates a new reserve, commit, release, or transfer effect is pr
 same local transaction as the business, outbox, and audit rows. A rolled-back (killed mid-tx) attempt leaves no partial
 rows, no half-transfers, no orphan `reservation` without `operation`, and capacity sums consistent.
 Falsifier: committed entry lost after restart, partial rows after a kill-mid-tx rollback, or debit without credit in transfer.
+Transfer locks both capacities in ascending PostgreSQL UUID order before either update, so
+opposite-direction requests cannot form a capacity-lock cycle. `TransferAtomicityIT` checks
+that order using a blocked lower UUID and a still-lockable higher UUID, verifies total sums
+under concurrent transfers, and terminates the live database connection between debit and
+credit to check full rollback and same-key recovery.
 
 ## I6 — Tenant isolation (planned, not implemented)
 
@@ -85,5 +96,5 @@ Falsifier: a reservation committing when `expires_at <= now()`, or an expired re
 
 ## Planned / Not implemented
 
-Transfer (O2-2), expiry deadline storage/evaluation and the reaper (O2-3), HTTP authentication and authorization (O3), observability dashboards and alerts (O4), outbox relay worker to external queues, replication, control-plane APIs, live migration, and privacy controls are not implemented and must not be assumed by callers.
+Expiry deadline storage/evaluation and the reaper (O2-3), HTTP authentication and authorization (O3), observability dashboards and alerts (O4), outbox relay worker to external queues, replication, control-plane APIs, live migration, and privacy controls are not implemented and must not be assumed by callers.
 See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md) for O2 design specifications.
