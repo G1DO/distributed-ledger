@@ -8,6 +8,30 @@ development service is not production-ready.
 
 ## 5-min replay
 
+Run the complete O2 lifecycle and crash/recovery drill from the repository root (local Docker with
+Compose, Python 3, and curl required):
+
+```bash
+python3 scripts/o2-compose-e2e.py
+```
+
+The driver builds the Java 25 image, starts the actual `docker-compose.yml` under a unique
+project with disposable volumes and dynamically assigned loopback ports, and exercises
+Reserve → Commit, Release, Transfer, scheduled Expire → Query. It checks stored-response
+replay, capacity counters, reservation sums, and one audit/outbox effect per operation.
+An outbox table lock and an observed database lock wait place a Commit after its business/audit
+writes; the driver kills PostgreSQL, restarts it, and checks every business row is unchanged.
+It retries that Commit, kills PostgreSQL again after acknowledgment, and verifies byte-identical
+replay/lookup after PostgreSQL and application restart. Its own stack and volumes are removed
+on completion; existing Compose projects are untouched.
+
+The final line prints the result, elapsed time, and evidence directory under
+`service/target/o2-compose-e2e/`: raw HTTP requests/responses, database snapshots, process logs,
+environment, base commit, and working-tree patch. A first image build may exceed five minutes.
+This automated drill does not establish the later O4 blind-operator recovery SLO.
+
+For a manual Reserve/Commit walkthrough on the normal development stack:
+
 ```bash
 cd service
 ./mvnw verify -Pstrict
@@ -51,29 +75,10 @@ curl -s -X POST localhost:8080/v1/commit -H 'Content-Type: application/json' \
 # -> 200 identical body, no second decrement; same key+different body -> 422
 ```
 
-Crash/restart replay: start a reserve and stop the app before its response. A request can either
-commit before the stop or roll back with the lost connection; it must never leave a partial state.
-After restart, reusing the same key either returns the committed body or creates the one valid
-reserve.
-
-```bash
-KKEY=kill-reserve-1
-curl -sS -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $KKEY" \
-  -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}" &
-sleep 0.05; docker compose -f ../docker-compose.yml kill app; wait || true
-docker compose -f ../docker-compose.yml up -d app
-curl -s -X POST localhost:8080/v1/reserve -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $KKEY" \
-  -d "{\"accountId\":\"$ACCT\",\"amount\":1,\"idempotencyKey\":\"$KKEY\"}"
-curl -s localhost:8080/v1/operations/$KKEY
-curl -s "localhost:8080/v1/query?accountId=$ACCT"
-```
-
-The timing smoke test above intentionally accepts either commit outcome. From `service/`, use
-`./mvnw -Dit.test=KillMidTxIT,ProcessCrashIT verify -Pstrict` for injected transaction failures
-and actual application/PostgreSQL kills on disposable test infrastructure. The [O1 docs](docs/README.md)
-separate each failure model and its limitations from the 32-writer concurrency experiment.
+From `service/`, `./mvnw -Dit.test=KillMidTxIT,ProcessCrashIT verify -Pstrict` also exercises
+injected transaction failures and actual application/PostgreSQL kills on disposable test
+infrastructure. The [crash matrix](docs/operations/runbooks/o1-crash-matrix.md) explains those
+failure models and their limitations.
 
 If the host already occupies 5432/8080, use overrides (defaults unchanged):
 
