@@ -6,19 +6,21 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Read-only queries for the O1 slice. */
+/** Capacity reads enforce expiry; operation lookup remains an immutable stored-response read. */
 @Service
 public class QueryService {
 
   private final JdbcLedgerRepository repository;
+  private final ExpiryService expiry;
 
-  public QueryService(JdbcLedgerRepository repository) {
+  public QueryService(JdbcLedgerRepository repository, ExpiryService expiry) {
     this.repository = repository;
+    this.expiry = expiry;
   }
 
-  @Transactional(readOnly = true)
   public Map<String, Object> capacityByAccount(String accountIdValue) {
     UUID accountId = SliceSupport.requireUuidV4(accountIdValue, "accountId");
+    expiry.expireForAccount(accountId);
     return repository.getCapacity(accountId);
   }
 

@@ -6,8 +6,6 @@ import com.g1do.ledger.infra.JdbcLedgerRepository;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Commit slice: {@code RESERVED -> COMMITTED} atomically. Second commit under the same key returns
@@ -18,17 +16,26 @@ public class CommitService {
 
   private final JdbcLedgerRepository repository;
   private final OperationCoordinator operations;
+  private final ExpiryService expiry;
 
-  public CommitService(JdbcLedgerRepository repository, OperationCoordinator operations) {
+  public CommitService(
+      JdbcLedgerRepository repository, OperationCoordinator operations, ExpiryService expiry) {
     this.repository = repository;
     this.operations = operations;
+    this.expiry = expiry;
   }
 
-  @Transactional(isolation = Isolation.READ_COMMITTED)
   public OperationResult commit(
       String reservationIdValue, String idempotencyKey, String headerKey) {
     SliceSupport.requireHeaderMatchesBody(headerKey, idempotencyKey);
     UUID reservationId = SliceSupport.requireUuidV4(reservationIdValue, "reservationId");
+    return expiry.executeTerminal(
+        reservationId,
+        () -> commitInTransaction(reservationIdValue, reservationId, idempotencyKey));
+  }
+
+  private OperationResult commitInTransaction(
+      String reservationIdValue, UUID reservationId, String idempotencyKey) {
 
     String canonical = RequestHash.canonicalCommit(reservationIdValue, idempotencyKey);
     String requestHash = RequestHash.sha256Hex(canonical);
@@ -43,6 +50,7 @@ public class CommitService {
             .lockReservation(reservationId)
             .orElseThrow(
                 () -> new LedgerNotFoundException("reservation not found: " + reservationIdValue));
+    expiry.rejectIfDue(reservation);
     UUID accountId = (UUID) reservation.get("account_id");
     int amount = ((Number) reservation.get("amount")).intValue();
     String statusValue = (String) reservation.get("status");
