@@ -1,6 +1,6 @@
 # Ledger API
 
-The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `GET /v1/query`,
+The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `POST /v1/release`, `GET /v1/query`,
 `GET /v1/operations/{key}`, `GET /health`, and `GET /ready`. The service has no HTTP
 authentication or authorization layer.
 
@@ -8,8 +8,8 @@ authentication or authorization layer.
 
 - `Idempotency-Key` (required on every POST): opaque client token, `1..64` chars.
   Must equal body `idempotencyKey`, otherwise `400`.
-  - Same key + same canonical body → echo stored `response_body` byte-for-byte, no second effect.
-  - Same key + different body → `422` with error body, no state change.
+  - Same key + same command and canonical body → echo stored `response_body` byte-for-byte, no second effect.
+  - Same key + different command or body → `422` with error body, no state change.
 - `Content-Type: application/json` on POSTs.
 
 ## Body echo + hashing rule
@@ -18,14 +18,16 @@ authentication or authorization layer.
   - reserve canonical: `{"accountId":"...","amount":N,"idempotencyKey":"...","ttlSec":T?}`
     (keys sorted, `ttlSec` omitted when null).
   - commit canonical: `{"idempotencyKey":"...","reservationId":"..."}`.
-  - release canonical: `{"idempotencyKey":"...","reservationId":"..."}` (O2 specification).
+  - release canonical: `{"idempotencyKey":"...","reservationId":"..."}`.
   - transfer canonical: `{"amount":N,"fromAccountId":"...","idempotencyKey":"...","toAccountId":"..."}` (keys sorted, O2 specification).
 - Every mutating response persists `response_body` (JSONB) before commit and replays the stored
   text verbatim. Postgres JSONB normalizes formatting on write; the first response is read back
   from the stored row, so first / replay / `GET /operations/{key}` are byte-identical.
 - All SQL uses bound parameters. `accountId` / `reservationId` must be UUIDv4, `amount > 0`.
 - Keys are currently global, not principal-scoped. Claiming a key precedes business locks, so
-  a valid replay still succeeds after capacity is exhausted or its reservation is committed.
+  a valid replay still succeeds after capacity is exhausted or its reservation is terminal.
+  Commit and Release have the same canonical body shape but different operation types; reusing
+  a Commit key for Release, or vice versa, returns `422` even when the hashes match.
   A failed transaction does not retain its key. This is at-most-once committed effect, not
   exactly-once network delivery; a timeout must be resolved by lookup or same-key retry.
 
@@ -35,8 +37,9 @@ authentication or authorization layer.
 
 Request: `{ "accountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64", "ttlSec": 3600? }`
 
-`ttlSec`, when supplied, must be at least 1 and participates in the request hash. O1 does not run
-an expiry process; O2 defines authoritative DB `now()` expiry and scheduled reaper.
+`ttlSec`, when supplied, must be at least 1 and participates in the request hash. It does not yet
+set an expiration deadline: reservations are stored with `expires_at = NULL`, meaning never
+expires. Lazy expiry and the scheduled reaper remain O2-3 scope.
 
 - `201` first commit: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"uuid-v4","status":"RESERVED" }` (JSONB-normalized formatting).
@@ -64,18 +67,32 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
   `UPDATE reservation SET COMMITTED`, `reserved -= amount, committed += amount`
   (`SUM` stable), insert `outbox` + `audit_entry(kind=COMMIT)`, and complete the operation same tx.
 
-### `POST /v1/release` (O2 design draft)
+### `POST /v1/release`
 
 Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 
 - `200` first + replay: `{ "accountId":"...","amount":100,"idempotencyKey":"...",
   "reservationId":"...","status":"RELEASED" }`.
-- Replay same key+same hash → original body, no second `audit_entry`, no second increment.
-- `409` reservation already in a terminal state (`COMMITTED`, `RELEASED`, `EXPIRED`).
-- `422` same key + different hash. `404` unknown reservation.
+- Replay same key+same command+same hash → original body, no second audit/outbox row or capacity change.
+- `409` reservation already in a terminal state (`COMMITTED`, `RELEASED`, `EXPIRED`) under a new
+  key, or a capacity constraint violation.
+- `422` same key + different command or hash. `404` unknown reservation.
+- `400` missing/invalid header, body, UUIDv4, or a header/body key mismatch.
 - Atomically `RESERVED -> RELEASED`: claim operation and resolve replay/mismatch, lock
-  `reservation` + `capacity FOR UPDATE`, `UPDATE reservation SET RELEASED`, `reserved -= amount`
-  (`available += amount`), insert `outbox` + `audit_entry(kind=RELEASE)`, and complete operation same tx.
+  `reservation FOR UPDATE`, then `capacity FOR UPDATE` in `READ COMMITTED`, set the reservation
+  status to `RELEASED`, and decrement `reserved` by its amount. Generated `available` increases
+  by the same amount; `total` and `committed` stay unchanged.
+- Exactly one `audit_entry(kind=RELEASE)` with before/after capacity snapshots and one
+  `outbox(aggregate='release', dispatched=false)` row are inserted in that transaction. The
+  outbox payload contains `accountId`, `amount`, `operationId`, and `reservationId`. The completed
+  `operation(type=RELEASE)` stores the response before commit. Failure rolls back the operation
+  claim and all effects.
+- Commit versus Release on one reservation produces one terminal transition: the winner returns
+  `200`; the competing command with a different key returns `409` after observing that state.
+  Only the winner changes capacity or inserts audit/outbox rows. Concurrent same-key Releases
+  return the same `200` body with one effect.
+- `EXPIRED` is recognized as terminal, but this slice does not create expiry transitions or
+  evaluate deadlines.
 
 ### `POST /v1/transfer` (O2 design draft)
 
@@ -108,5 +125,5 @@ Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100,
 
 ## Planned / Not implemented
 
-HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
-See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../design/rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md).
+Transfer (O2-2), expiry (O2-3), HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
+See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../design/rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md).

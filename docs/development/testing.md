@@ -24,7 +24,7 @@ JDK 26 is a deliberately opt-in compatibility experiment:
 Ordinary application and health tests use the H2 test configuration. Database integration tests
 use a shared Testcontainers PostgreSQL 16 container and verify schema constraints, audit
 permissions, idempotency (including concurrent writers), transactional rollback, the outbox, and
-the reserve-to-commit slice. Docker must be available for those integration tests.
+the Reserve, Commit, and Release slices. Docker must be available for those integration tests.
 
 `ProcessCrashIT` uses a separate disposable PG16 container with `fsync`, `synchronous_commit`,
 and `full_page_writes` explicitly enabled. It starts the packaged application JAR in child JVMs
@@ -58,3 +58,20 @@ itself; CI success and an approved architectural review are different evidence.
 These are bounded O1 tests, not the planned 1,000 concurrent/shrinkable O2 histories, tenant
 isolation, PITR, host-power-loss durability, or a production-readiness certificate. Tests requiring
 a packaged JAR must run via `verify`, not just `test` or `failsafe:integration-test` directly.
+
+## Release verification scope
+
+`ReleaseIT` covers Release accounting, stored-response replay, validation and terminal-state
+failures, audit/outbox effects, and rollback after terminating the transaction's database
+connection. `CommitReleaseRaceIT` forces PostgreSQL lock waits to exercise competing Commit
+and Release commands and concurrent Release requests. `ReleaseMigrationIT` upgrades a populated
+V1 schema to V2 and checks data preservation, status constraints, and existing database guards.
+These tests cover recognized terminal states, not the future expiry worker or deadline evaluation.
+
+Run the focused integration tests from `service/` on JDK 25 with Docker available:
+
+```bash
+./mvnw -Dit.test=ReleaseIT,CommitReleaseRaceIT,ReleaseMigrationIT verify -Pstrict
+```
+
+Use the full `clean verify -Pstrict` command above for the repository gate.
