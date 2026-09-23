@@ -1,5 +1,9 @@
 # Ledger API
 
+The five-operation lifecycle and stored-response recovery are exercised by the
+[O2 system gate](../operations/runbooks/o2-system-verification.md), including real Compose HTTP
+requests. Expire remains an internal/lazy operation, with no public Expire endpoint.
+
 The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `POST /v1/release`, `POST /v1/transfer`, `GET /v1/query`,
 `GET /v1/operations/{key}`, `GET /health`, and `GET /ready`. The service has no HTTP
 authentication or authorization layer.

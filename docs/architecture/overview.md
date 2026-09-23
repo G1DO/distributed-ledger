@@ -109,3 +109,11 @@ backfill deadlines or change existing reservations; no migration is rewritten.
 `capacity.available` is a stored generated value: `total - reserved - committed`. Database check
 constraints prevent negative capacity; row locks serialize the current implementation's capacity
 updates. The detailed behavioral guarantees are in the [ledger invariants](../design/specifications/ledger-invariants.md).
+
+## System verification boundary
+
+The [O2 system gate](../operations/runbooks/o2-system-verification.md) combines capacity-edge
+contention, generated concurrent histories, transaction fault/race tests, and a real Compose
+lifecycle/crash drill. These use existing service paths and add no runtime endpoint or schema
+change. The Compose drill observes a transaction waiting at outbox insertion before killing
+its disposable PostgreSQL process.

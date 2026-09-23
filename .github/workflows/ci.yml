@@ -18,6 +18,20 @@ jobs:
       - name: Verify (strict)
         working-directory: service
         run: ./mvnw -B verify -Pstrict
+      - name: Check documentation taxonomy
+        run: python3 scripts/check-docs.py
+      - name: O2 lifecycle and PostgreSQL recovery on Compose
+        run: python3 scripts/o2-compose-e2e.py
+      - name: Record evidence source
+        if: always()
+        run: |
+          mkdir -p service/target/o2-evidence
+          git rev-parse HEAD > service/target/o2-evidence/commit.txt
+          git status --porcelain > service/target/o2-evidence/worktree.txt
+          java -version 2> service/target/o2-evidence/java.txt
+          docker version > service/target/o2-evidence/docker.txt
+          docker compose version > service/target/o2-evidence/compose.txt
+          echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > service/target/o2-evidence/ci-url.txt
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -27,6 +41,7 @@ jobs:
             service/target/surefire-reports/
             service/target/failsafe-reports/
             service/target/process-crash/
+            service/target/o2-*/
           retention-days: 30
 
   build-jdk26:
@@ -51,6 +66,7 @@ jobs:
             service/target/surefire-reports/
             service/target/failsafe-reports/
             service/target/process-crash/
+            service/target/o2-*/
           retention-days: 30
 
   osv:
