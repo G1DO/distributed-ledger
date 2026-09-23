@@ -1,6 +1,6 @@
 # Ledger API
 
-The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `POST /v1/release`, `GET /v1/query`,
+The implemented endpoints are `POST /v1/reserve`, `POST /v1/commit`, `POST /v1/release`, `POST /v1/transfer`, `GET /v1/query`,
 `GET /v1/operations/{key}`, `GET /health`, and `GET /ready`. The service has no HTTP
 authentication or authorization layer.
 
@@ -19,7 +19,7 @@ authentication or authorization layer.
     (keys sorted, `ttlSec` omitted when null).
   - commit canonical: `{"idempotencyKey":"...","reservationId":"..."}`.
   - release canonical: `{"idempotencyKey":"...","reservationId":"..."}`.
-  - transfer canonical: `{"amount":N,"fromAccountId":"...","idempotencyKey":"...","toAccountId":"..."}` (keys sorted, O2 specification).
+  - transfer canonical: `{"amount":N,"fromAccountId":"...","idempotencyKey":"...","toAccountId":"..."}` (keys sorted).
 - Every mutating response persists `response_body` (JSONB) before commit and replays the stored
   text verbatim. Postgres JSONB normalizes formatting on write; the first response is read back
   from the stored row, so first / replay / `GET /operations/{key}` are byte-identical.
@@ -94,20 +94,39 @@ Request: `{ "reservationId": "uuid-v4", "idempotencyKey": "opaque-1..64" }`
 - `EXPIRED` is recognized as terminal, but this slice does not create expiry transitions or
   evaluate deadlines.
 
-### `POST /v1/transfer` (O2 design draft)
+### `POST /v1/transfer`
 
 Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100, "idempotencyKey": "opaque-1..64" }`
 
 - `200` first + replay: `{ "fromAccountId":"...","toAccountId":"...","amount":100,
   "idempotencyKey":"...","status":"TRANSFERRED" }`.
-- Replay same key+same hash → original body, no second transfer effect.
-- `409` insufficient source available capacity (`available < amount`) or destination capacity overflow (`total + amount > INT_MAX`).
-- `422` same key + different hash.
-- `400` same-account transfer (`fromAccountId == toAccountId`), `amount <= 0`, invalid UUID, or missing headers.
+- Replay same key+same command+same hash → original stored body byte-for-byte, even after
+  source capacity is exhausted or the destination reaches its limit. No second transfer effect.
+- `409` insufficient source available capacity (`available < amount`).
+- `400` destination capacity overflow (`total + amount > 2,147,483,647`). The application checks
+  `total > INT_MAX - amount` before either write, without overflowing its own arithmetic.
+  PostgreSQL `INT` storage and existing nonnegative capacity `CHECK`s provide the database backstop.
+- `422` same key + different command or hash, resolved before account lookup, balance, or overflow
+  rejection. Structural request validation precedes the operation claim.
+- `400` same-account transfer (`fromAccountId == toAccountId`), invalid UUIDv4, invalid/missing
+  key, or a header/body key mismatch. Self-transfers are rejected before claiming a key or locking capacity.
+  `amount` must be a JSON integer in `1..2,147,483,647`; null, fractional/exponent notation,
+  numeric strings, and out-of-range values are rejected without coercion or truncation.
 - `404` unknown `fromAccountId` or `toAccountId`.
 - Atomically moves capacity: claim operation → resolve replay/mismatch → lock capacities in ascending UUID order
   `ORDER BY account_id ASC FOR UPDATE` → validate balances → debit source `total -= amount` and credit destination
-  `total += amount` → insert `outbox` + `audit_entry(kind=TRANSFER)` → complete operation same tx.
+  `total += amount` → insert outbox + audit → complete operation in one `READ COMMITTED` transaction.
+  Both accounts retain their `reserved` and `committed` counters; `available` moves by the same
+  amount as `total`, and each capacity version increments once. No reservation is created.
+- Exactly one `audit_entry(kind=TRANSFER, account_id=fromAccountId)` records both accounts:
+  `before_snapshot` and `after_snapshot` each contain `from` and `to` objects with `accountId`,
+  `total`, `reserved`, `committed`, and `available`. One `outbox(aggregate='transfer', dispatched=false)`
+  contains `amount`, `fromAccountId`, `toAccountId`, and `operationId` in its payload.
+- Failure rolls back both capacity updates and every operation/audit/outbox row. For an
+  unobserved response, `GET /v1/operations/{key}` returns the committed body, or `404` when no
+  effect committed; retry the same key and body to resolve an in-flight or rolled-back attempt.
+  Keys and lookups remain global within the current single-principal service; cross-principal
+  isolation is O3 scope.
 
 ### `GET /v1/query?accountId=`
 
@@ -125,5 +144,5 @@ Request: `{ "fromAccountId": "uuid-v4", "toAccountId": "uuid-v4", "amount": 100,
 
 ## Planned / Not implemented
 
-Transfer (O2-2), expiry (O2-3), HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
+Expiry (O2-3), HTTP authentication and authorization (O3), metrics/tracing/alert dashboards (O4), and outbox relay worker to message brokers remain planned subsequent outcomes.
 See [RFC: O2 Transfer Accounting, Lock Ordering, and Expiry Semantics](../design/rfcs/o2-transfer-expiry.md) and [DEC-LEDGER-06](../decisions/DEC-LEDGER-06-lock-order-expiry-clock.md).

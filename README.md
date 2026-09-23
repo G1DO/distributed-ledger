@@ -1,8 +1,8 @@
 # Distributed Ledger
 
 Java 25 / Spring Boot 4.1 / PostgreSQL 16 capacity-reservation engine. The implemented slice is
-`Reserve → Commit or Release → Query`, with transactional idempotency, audit, and outbox storage.
-Transfer, expiry, authorization, relay, and PITR are planned, not implemented. This unauthenticated
+`Reserve → Commit or Release → Query`, plus atomic capacity transfers, with transactional idempotency,
+audit, and outbox storage. Expiry, authorization, relay, and PITR are planned, not implemented. This unauthenticated
 development service is not production-ready.
 
 ## 5-min replay
