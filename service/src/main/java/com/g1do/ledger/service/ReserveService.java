@@ -36,6 +36,9 @@ public class ReserveService {
     if (amount <= 0) {
       throw new BadRequestException("amount must be > 0");
     }
+    if (ttlSec != null && ttlSec <= 0) {
+      throw new BadRequestException("ttlSec must be > 0");
+    }
     UUID accountId = SliceSupport.requireUuidV4(accountIdValue, "accountId");
 
     String canonical = RequestHash.canonicalReserve(accountIdValue, amount, idempotencyKey, ttlSec);
@@ -76,7 +79,7 @@ public class ReserveService {
             + "\",\"status\":\"RESERVED\"}";
 
     repository.addReserved(accountId, amount);
-    repository.insertReservation(reservationId, accountId, operationId, amount, "RESERVED");
+    repository.insertReservation(reservationId, accountId, operationId, amount, "RESERVED", ttlSec);
     transactionProbe.reached(TransactionCheckpoint.AFTER_RESERVATION_INSERT);
 
     String beforeJson = snapshotJson(total, reserved, committed, available);
