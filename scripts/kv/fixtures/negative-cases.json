@@ -1,0 +1,23 @@
+[
+  {"name":"GET absent is not empty","line":1,"output":{"status":"ok","value":""}},
+  {"name":"DELETE absent returns null","line":2,"output":{"status":"ok","previous":"present"}},
+  {"name":"CAS absent mismatch","line":3,"output":{"status":"ok","swapped":true,"previous":null}},
+  {"name":"CAS absent success","line":4,"output":{"status":"ok","swapped":false,"previous":null}},
+  {"name":"GET empty is not absent","line":5,"output":{"status":"ok","value":null}},
+  {"name":"PUT overwrite previous value","line":6,"output":{"status":"ok","previous":"one"}},
+  {"name":"CAS present mismatch","line":7,"output":{"status":"ok","swapped":true,"previous":"one"}},
+  {"name":"CAS mismatch must not mutate","line":8,"output":{"status":"ok","value":"unused"}},
+  {"name":"CAS present success previous value","line":9,"output":{"status":"ok","swapped":true,"previous":"two"}},
+  {"name":"PUT absent previous value","line":10,"output":{"status":"ok","previous":"🧪"}},
+  {"name":"GET present","line":11,"output":{"status":"ok","value":"other"}},
+  {"name":"DELETE present previous value","line":12,"output":{"status":"ok","previous":null}},
+  {"name":"DELETE removes value","line":13,"output":{"status":"ok","value":"two"}},
+  {"name":"PUT after deletion","line":14,"output":{"status":"ok","previous":"two"}},
+  {"name":"Invalid request rejected","line":15,"output":{"status":"ok","previous":"🧪"}},
+  {"name":"CAS bool cannot be number","line":16,"output":{"status":"ok","swapped":0,"previous":"final"}},
+  {"name":"Invalid request must not mutate","line":17,"output":{"status":"ok","previous":"false"}},
+  {"name":"Final value differs","line":19,"output":{"state":{"a":"other"}}},
+  {"name":"Final state missing key","line":19,"output":{"state":{}}},
+  {"name":"Final state extra key","line":19,"output":{"state":{"a":"final","ghost":"value"}}},
+  {"name":"Final state wrong value type","line":19,"output":{"state":{"a":false}}}
+]
